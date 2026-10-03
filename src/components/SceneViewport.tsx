@@ -12,11 +12,18 @@ import { AgentConnection } from '../core/AgentConnection';
 import { WorldState, AvatarState } from '../core/WorldState';
 import { SpeechBubble } from './SpeechBubble';
 import { UploadCloud } from 'lucide-react';
+import { Scene3DManager } from '../core/Scene3DManager';
+import { SceneSoundtrackManager } from '../core/SceneSoundtrackManager';
+import { MultiAvatarSceneGroup } from '../core/MultiAvatarSceneGroup';
+import { MultiCDIManager } from '../core/MultiCDIManager';
 
 interface SceneViewportProps {
   connection: AgentConnection;
   worldState: WorldState;
+  soundtrackManager: SceneSoundtrackManager;
+  multiCDIManager?: MultiCDIManager;
   onAvatarControllerReady: (controller: AvatarController, executor: ActionExecutor) => void;
+  onScene3DManagerReady?: (manager: Scene3DManager) => void;
   onModelLoaded: (name: string) => void;
   onDropFile: (file: File) => void;
 }
@@ -24,7 +31,10 @@ interface SceneViewportProps {
 export const SceneViewport: React.FC<SceneViewportProps> = ({
   connection,
   worldState,
+  soundtrackManager,
+  multiCDIManager,
   onAvatarControllerReady,
+  onScene3DManagerReady,
   onModelLoaded,
   onDropFile,
 }) => {
@@ -37,6 +47,8 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
 
   const controllerRef = useRef<AvatarController | null>(null);
   const executorRef = useRef<ActionExecutor | null>(null);
+  const scene3DManagerRef = useRef<Scene3DManager | null>(null);
+  const multiAvatarGroupRef = useRef<MultiAvatarSceneGroup | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -48,6 +60,20 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
       setCurrentAvatarState(state);
     });
   }, [worldState]);
+
+  // Subscribe to MultiCDIManager updates for Group View & Peer Bus Arcs
+  useEffect(() => {
+    if (!multiCDIManager) return;
+    return multiCDIManager.subscribe((state) => {
+      multiAvatarGroupRef.current?.setVisible(state.viewMode === 'group');
+      if (state.currentPeerDialogue) {
+        multiAvatarGroupRef.current?.triggerPeerDialogueBeam(
+          state.currentPeerDialogue.from_id,
+          state.currentPeerDialogue.to_id
+        );
+      }
+    });
+  }, [multiCDIManager]);
 
   // Initialize Three.js Scene
   useEffect(() => {
@@ -175,6 +201,18 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
     grid.position.y = 0.004;
     scene.add(grid);
 
+    // 6.5 Dynamic 3D Scene Manager (Environments, Lighting, Weather & Soundtracks)
+    const scene3DManager = new Scene3DManager(scene, soundtrackManager);
+    scene3DManagerRef.current = scene3DManager;
+    onScene3DManagerReady?.(scene3DManager);
+
+    // 6.6 Multi-Avatar Scene Group (Naia, Salem, Nova in Group View)
+    const multiAvatarGroup = new MultiAvatarSceneGroup(scene);
+    multiAvatarGroupRef.current = multiAvatarGroup;
+    if (multiCDIManager) {
+      multiAvatarGroup.setVisible(multiCDIManager.getViewMode() === 'group');
+    }
+
     // 7. AvatarController & ActionExecutor
     const avatarController = new AvatarController({
       scene,
@@ -207,6 +245,8 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
       controls.update();
       avatarController.update(delta);
       actionExecutor.update(delta);
+      scene3DManager.update(delta);
+      multiAvatarGroup.update(delta);
 
       renderer.render(scene, camera);
 

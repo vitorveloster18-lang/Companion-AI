@@ -19,7 +19,41 @@ import { HeaderOverlay } from './components/HeaderOverlay';
 import { AgentSelector } from './components/AgentSelector';
 import { SettingsModal } from './components/SettingsModal';
 import { CompanionChatOverlay } from './components/CompanionChatOverlay';
-import { ConnectionStatus, LogEntry, RuntimeStatusMessage, BotConfig } from './types/protocol';
+import {
+  ConnectionStatus,
+  LogEntry,
+  RuntimeStatusMessage,
+  BotConfig,
+  AudioInputMessage,
+  AudioOutputMessage,
+  VisionResponseMessage,
+  NotificationMessage,
+  StateUpdateMessage,
+  CDITimelineEventMessage,
+  ConfigDataMessage,
+  SceneSetMessage,
+  MemoryGalleryMessage,
+  CDIListMessage,
+  PeerBusEventMessage,
+} from './types/protocol';
+import { VoiceLipSyncManager } from './core/VoiceLipSyncManager';
+import { VisionManager } from './core/VisionManager';
+import { VisionOverlay } from './components/VisionOverlay';
+import { OfflineSyncManager } from './core/OfflineSyncManager';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { NotificationManager } from './core/NotificationManager';
+import { NotificationToastContainer } from './components/NotificationToastContainer';
+import { WakeWordManager } from './core/WakeWordManager';
+import { CDITimelineStore } from './core/CDITimelineStore';
+import { CDITimelineOverlay } from './components/CDITimelineOverlay';
+import { CDIConfigManager } from './core/CDIConfigManager';
+import { Scene3DManager } from './core/Scene3DManager';
+import { SceneSoundtrackManager } from './core/SceneSoundtrackManager';
+import { CDIMemoryGalleryStore } from './core/CDIMemoryGalleryStore';
+import { CDIMemoryGalleryModal } from './components/CDIMemoryGalleryModal';
+import { MultiCDIManager } from './core/MultiCDIManager';
+import { PeerBusDialogueOverlay } from './components/PeerBusDialogueOverlay';
+import { CyberSidebar } from './components/CyberSidebar';
 
 export default function App() {
   // 1. Core Managers (Singletons)
@@ -30,9 +64,27 @@ export default function App() {
     new ConversationManager(connectionRef.current, messageStoreRef.current)
   );
   const agentManagerRef = useRef<AgentManager>(new AgentManager(connectionRef.current));
+  const voiceManagerRef = useRef<VoiceLipSyncManager>(new VoiceLipSyncManager());
+  const visionManagerRef = useRef<VisionManager>(new VisionManager());
+  const offlineSyncManagerRef = useRef<OfflineSyncManager>(new OfflineSyncManager());
+  const notificationManagerRef = useRef<NotificationManager>(new NotificationManager());
+  const wakeWordManagerRef = useRef<WakeWordManager>(new WakeWordManager());
+  const timelineStoreRef = useRef<CDITimelineStore>(new CDITimelineStore());
+  const configManagerRef = useRef<CDIConfigManager>(new CDIConfigManager(connectionRef.current));
+  const soundtrackManagerRef = useRef<SceneSoundtrackManager>(new SceneSoundtrackManager());
+  const memoryGalleryStoreRef = useRef<CDIMemoryGalleryStore>(
+    new CDIMemoryGalleryStore(connectionRef.current)
+  );
+  const multiCDIManagerRef = useRef<MultiCDIManager>(new MultiCDIManager(connectionRef.current));
 
   const avatarControllerRef = useRef<AvatarController | null>(null);
   const actionExecutorRef = useRef<ActionExecutor | null>(null);
+
+  // 2. State
+  const [scene3DManager, setScene3DManager] = useState<Scene3DManager | null>(null);
+  const [currentAffect, setCurrentAffect] = useState<string>('wondering');
+  const [isMemoryGalleryOpen, setIsMemoryGalleryOpen] = useState<boolean>(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
 
   // 2. State
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
@@ -49,6 +101,9 @@ export default function App() {
 
   const [isAgentSelectorOpen, setIsAgentSelectorOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isVisionOpen, setIsVisionOpen] = useState<boolean>(false);
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [isTimelineOpen, setIsTimelineOpen] = useState<boolean>(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [worldState, setWorldState] = useState<AvatarState>(worldStateRef.current.getState());
 
@@ -132,6 +187,80 @@ export default function App() {
               prev.map((b) => (b.id === bot_id ? { ...b, is_online: Boolean(is_online) } : b))
             );
           }
+        } else if (msg.type === 'audio.output') {
+          const audioMsg = data as AudioOutputMessage;
+          voiceManagerRef.current.playAudioOutput(audioMsg);
+          if (audioMsg.text) {
+            msgStore.addMessage(activeAgent.id, {
+              id: audioMsg.id || `audio_${Date.now()}`,
+              role: 'agent',
+              content: audioMsg.text,
+              timestamp: Date.now(),
+              agentId: activeAgent.id,
+              status: 'completed',
+            });
+          }
+        } else if (msg.type === 'vision.response') {
+          const visionMsg = data as VisionResponseMessage;
+          visionManagerRef.current.handleVisionResponse(visionMsg);
+
+          if (visionMsg.reaction_expression && avatarControllerRef.current) {
+            avatarControllerRef.current.setExpression(visionMsg.reaction_expression, 1.0);
+          } else if (visionMsg.emotion_detected && avatarControllerRef.current) {
+            avatarControllerRef.current.setExpression(visionMsg.emotion_detected, 1.0);
+          }
+
+          if (visionMsg.reaction_animation && avatarControllerRef.current) {
+            avatarControllerRef.current.setAnimation(visionMsg.reaction_animation);
+          }
+
+          if (visionMsg.description) {
+            msgStore.addMessage(activeAgent.id, {
+              id: visionMsg.id || `vis_${Date.now()}`,
+              role: 'agent',
+              content: `👁️ [Visão]: "${visionMsg.description}" (Emoção: ${visionMsg.emotion_detected || 'neutra'})`,
+              timestamp: Date.now(),
+              agentId: activeAgent.id,
+              status: 'completed',
+            });
+          }
+        } else if (msg.type === 'notification') {
+          const notifMsg = data as NotificationMessage;
+          notificationManagerRef.current.handleNotification(notifMsg);
+
+          msgStore.addMessage(activeAgent.id, {
+            id: notifMsg.id || `notif_${Date.now()}`,
+            role: 'system',
+            content: `🔔 [${notifMsg.title}]: "${notifMsg.body}"`,
+            timestamp: Date.now(),
+            agentId: activeAgent.id,
+            status: 'completed',
+          });
+        } else if (msg.type === 'state.update') {
+          const stateMsg = data as StateUpdateMessage;
+          if (stateMsg.data) {
+            timelineStoreRef.current.updateBiometrics(stateMsg.data);
+          }
+        } else if (msg.type === 'timeline.event') {
+          const timelineMsg = data as CDITimelineEventMessage;
+          if (timelineMsg.event) {
+            timelineStoreRef.current.addTimelineEvent(timelineMsg.event);
+          }
+        } else if (msg.type === 'config.data') {
+          const configMsg = data as ConfigDataMessage;
+          configManagerRef.current.handleIncomingConfig(configMsg);
+        } else if (msg.type === 'scene.set') {
+          const sceneMsg = data as SceneSetMessage;
+          scene3DManager?.handleSceneSetMessage(sceneMsg);
+        } else if (msg.type === 'memory.gallery') {
+          const galleryMsg = data as MemoryGalleryMessage;
+          memoryGalleryStoreRef.current.handleIncomingMemories(galleryMsg.memories);
+        } else if (msg.type === 'cdi.list') {
+          const listMsg = data as CDIListMessage;
+          multiCDIManagerRef.current.handleIncomingCDIList(listMsg.cdis);
+        } else if (msg.type === 'peer_bus.event') {
+          const peerMsg = data as PeerBusEventMessage;
+          multiCDIManagerRef.current.handleIncomingPeerBusEvent(peerMsg);
         }
       }
     });
@@ -176,11 +305,169 @@ export default function App() {
     };
   }, [refreshBots, refreshSavedVRMs]);
 
+  // Keep camera streaming state updated
+  useEffect(() => {
+    return visionManagerRef.current.subscribe((vState) => {
+      setIsCameraActive(vState.isStreaming);
+    });
+  }, []);
+
+  // Frame capture pipeline: WebSocket forward to Python runtime or fallback to gateway AI
+  useEffect(() => {
+    const visionMgr = visionManagerRef.current;
+    const connection = connectionRef.current;
+
+    visionMgr.setOnFrameCaptured(async (frame) => {
+      // 1. Send vision.frame over WebSocket to Python CDI
+      connection.send({
+        ...frame,
+        agent_id: activeAgent.id,
+      });
+
+      // 2. Fallback to server-side Gemini multimodal if Python runtime is not connected
+      if (!isRuntimeConnected) {
+        try {
+          const res = await fetch('/api/vision/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: frame.data, format: frame.format }),
+          });
+
+          if (res.ok) {
+            const result = await res.json();
+            const visionResp: VisionResponseMessage = {
+              type: 'vision.response',
+              id: frame.id,
+              description: result.description,
+              emotion_detected: result.emotion_detected,
+              reaction_expression: result.reaction_expression,
+              reaction_animation: result.reaction_animation,
+              agent_id: activeAgent.id,
+            };
+
+            visionMgr.handleVisionResponse(visionResp);
+
+            if (result.reaction_expression && avatarControllerRef.current) {
+              avatarControllerRef.current.setExpression(result.reaction_expression, 1.0);
+            }
+            if (result.reaction_animation && avatarControllerRef.current) {
+              avatarControllerRef.current.setAnimation(result.reaction_animation);
+            }
+
+            if (result.description) {
+              messageStoreRef.current.addMessage(activeAgent.id, {
+                id: frame.id,
+                role: 'agent',
+                content: `👁️ [Visão]: "${result.description}" (Emoção: ${result.emotion_detected || 'neutra'})`,
+                timestamp: Date.now(),
+                agentId: activeAgent.id,
+                status: 'completed',
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('[Vision] Erro ao analisar frame:', err);
+        }
+      }
+    });
+  }, [activeAgent.id, isRuntimeConnected]);
+
+  // Offline sync queue flush handler
+  useEffect(() => {
+    offlineSyncManagerRef.current.setFlushHandler(async (queued) => {
+      const conn = connectionRef.current;
+      if (conn.getStatus() !== 'connected') {
+        conn.reconnect();
+      }
+      for (const msg of queued) {
+        conn.send(msg);
+      }
+      return true;
+    });
+  }, []);
+
+  // Save last known CDI state to local storage for offline continuity
+  useEffect(() => {
+    offlineSyncManagerRef.current.saveLastCDIState({
+      agentId: activeAgent.id,
+      agentName: activeAgent.name,
+      modelName,
+      expression: worldState.expression,
+      animation: worldState.animation,
+      messageCount: messages.length,
+      lastActive: Date.now(),
+    });
+  }, [activeAgent, modelName, worldState.expression, worldState.animation, messages.length]);
+
+  // Notification reply action handler
+  useEffect(() => {
+    notificationManagerRef.current.setOnReplyHandler((notif) => {
+      if (notif.agent_id && notif.agent_id !== activeAgent.id) {
+        agentManagerRef.current.selectAgent(notif.agent_id);
+      }
+      const chatInput = document.querySelector('textarea, input[placeholder*="mensagem"]') as HTMLInputElement | null;
+      if (chatInput) {
+        chatInput.focus();
+      }
+    });
+  }, [activeAgent.id]);
+
+  // Wake Word Detection Callback & Agent Name Sync ("Ei Kairós")
+  useEffect(() => {
+    wakeWordManagerRef.current.setAgentName(activeAgent.name);
+    configManagerRef.current.setAgentId(activeAgent.id);
+    memoryGalleryStoreRef.current.setAgentId(activeAgent.id);
+
+    wakeWordManagerRef.current.setOnWakeCallback((wakeMsg) => {
+      console.log(`[Wake Word Protocol] Emitindo wake.detected: "${wakeMsg.word}"`);
+
+      // 1. Send wake.detected over WebSocket
+      connectionRef.current.send(wakeMsg);
+
+      // 2. Avatar physical reaction (perk up, smile, nod)
+      if (avatarControllerRef.current) {
+        avatarControllerRef.current.setExpression('happy', 1.0);
+        avatarControllerRef.current.setAnimation('nod');
+      }
+
+      // 3. Record in conversation memory
+      messageStoreRef.current.addMessage(activeAgent.id, {
+        id: `wake_${Date.now()}`,
+        role: 'user',
+        content: `⚡ [Wake Word]: "Ei ${wakeMsg.word}"`,
+        timestamp: Date.now(),
+        agentId: activeAgent.id,
+        status: 'completed',
+      });
+
+      // 4. Automatically open audio connection / voice recording so user can speak immediately
+      try {
+        voiceManagerRef.current.startRecording();
+      } catch (err) {
+        console.warn('Falha ao iniciar gravação de voz após wake word:', err);
+      }
+    });
+  }, [activeAgent.name, activeAgent.id]);
+
+  // Automatic 3D Scene Synchronization based on CDI Affect / Mode
+  useEffect(() => {
+    return timelineStoreRef.current.subscribe((timelineState) => {
+      const affect = timelineState.biometrics.affect || 'wondering';
+      const mode = timelineState.biometrics.mode || 'awake';
+      setCurrentAffect(affect);
+
+      if (scene3DManager) {
+        scene3DManager.handleCDIAffectChange(affect, mode, worldState.isSpeaking);
+      }
+    });
+  }, [scene3DManager, worldState.isSpeaking]);
+
   // 7. Handlers
   const handleAvatarReady = useCallback(
     (controller: AvatarController, executor: ActionExecutor) => {
       avatarControllerRef.current = controller;
       actionExecutorRef.current = executor;
+      voiceManagerRef.current.setAvatarController(controller);
 
       // Automatically restore active saved VRM from IndexedDB database
       restoreSavedVRMModel();
@@ -275,8 +562,18 @@ export default function App() {
   const handleSendMessage = useCallback(
     (text: string) => {
       conversationManagerRef.current.sendMessage(text, activeAgent.id);
+
+      // If offline or disconnected from Gateway, queue message for background sync
+      if (!offlineSyncManagerRef.current.getIsOnline() || status !== 'connected') {
+        offlineSyncManagerRef.current.enqueueMessage({
+          type: 'chat.message',
+          id: `msg_offline_${Date.now()}`,
+          text,
+          agent_id: activeAgent.id,
+        });
+      }
     },
-    [activeAgent.id]
+    [activeAgent.id, status]
   );
 
   const handleClearHistory = useCallback(() => {
@@ -324,6 +621,40 @@ export default function App() {
     }
   }, []);
 
+  const handleSendAudio = useCallback(
+    (audio: { format: string; data: string; duration: number }) => {
+      const connection = connectionRef.current;
+      const msgStore = messageStoreRef.current;
+      const audioId = `audio_in_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+      // Record speech visually in conversation
+      msgStore.addMessage(activeAgent.id, {
+        id: audioId,
+        role: 'user',
+        content: `🎙️ [Áudio de Voz - ${audio.duration.toFixed(1)}s]`,
+        timestamp: Date.now(),
+        agentId: activeAgent.id,
+        status: 'completed',
+      });
+
+      const audioMsg: AudioInputMessage = {
+        type: 'audio.input',
+        id: audioId,
+        format: audio.format || 'webm',
+        data: audio.data,
+        agent_id: activeAgent.id,
+      };
+
+      // Send or queue audio.input
+      if (!offlineSyncManagerRef.current.getIsOnline() || status !== 'connected') {
+        offlineSyncManagerRef.current.enqueueMessage(audioMsg);
+      } else {
+        connection.send(audioMsg);
+      }
+    },
+    [activeAgent, status]
+  );
+
   const handleReconnect = useCallback(() => {
     connectionRef.current.reconnect();
     refreshBots();
@@ -337,26 +668,85 @@ export default function App() {
         <SceneViewport
           connection={connectionRef.current}
           worldState={worldStateRef.current}
+          soundtrackManager={soundtrackManagerRef.current}
+          multiCDIManager={multiCDIManagerRef.current}
           onAvatarControllerReady={handleAvatarReady}
+          onScene3DManagerReady={(mgr) => setScene3DManager(mgr)}
           onModelLoaded={handleModelLoaded}
           onDropFile={handleLoadFile}
         />
       </div>
 
-      {/* 2. Floating Minimal Top Navigation Bar */}
+      {/* 2. Floating Minimal Single-Button Navigation Header */}
       <HeaderOverlay
         status={status}
         activeAgent={activeAgent}
         isRuntimeConnected={isRuntimeConnected}
-        onOpenAgentSelector={() => setIsAgentSelectorOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+        multiCDIManager={multiCDIManagerRef.current}
       />
+
+      {/* 2.0 Cyberpunk Responsive Sliding Command Center Sidebar */}
+      <CyberSidebar
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        status={status}
+        isRuntimeConnected={isRuntimeConnected}
+        activeAgent={activeAgent}
+        multiCDIManager={multiCDIManagerRef.current}
+        scene3DManager={scene3DManager}
+        soundtrackManager={soundtrackManagerRef.current}
+        wakeWordManager={wakeWordManagerRef.current}
+        activeAffect={currentAffect}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenMemoryGallery={() => setIsMemoryGalleryOpen(true)}
+        onOpenTimeline={() => setIsTimelineOpen(true)}
+        onToggleVision={() => setIsVisionOpen((prev) => !prev)}
+        isVisionOpen={isVisionOpen}
+        onSelectAgent={handleSelectAgent}
+      />
+
+      {/* 2.1 Cyberpunk Offline Status & Sync HUD Indicator */}
+      <OfflineIndicator offlineSyncManager={offlineSyncManagerRef.current} />
+
+      {/* 2.2 Cyberpunk Optic Camera Viewfinder Overlay */}
+      <VisionOverlay
+        visionManager={visionManagerRef.current}
+        isOpen={isVisionOpen}
+        onClose={() => setIsVisionOpen(false)}
+        onSnapshot={() => visionManagerRef.current.captureFrame()}
+      />
+
+      {/* 2.3 Cyberpunk Real-Time Telemetry & Timeline Overlay */}
+      <CDITimelineOverlay
+        timelineStore={timelineStoreRef.current}
+        isOpen={isTimelineOpen}
+        onClose={() => setIsTimelineOpen(false)}
+        agentName={activeAgent.name}
+      />
+
+      {/* 2.4 Cyberpunk Visual Memory & Artifact Gallery Modal */}
+      <CDIMemoryGalleryModal
+        isOpen={isMemoryGalleryOpen}
+        onClose={() => setIsMemoryGalleryOpen(false)}
+        galleryStore={memoryGalleryStoreRef.current}
+        agentName={activeAgent.name}
+      />
+
+      {/* 2.5 Cyberpunk Inter-CDI Peer Bus Dialogue Balloons */}
+      <PeerBusDialogueOverlay multiCDIManager={multiCDIManagerRef.current} />
+
+      {/* 2.3 Cyberpunk Holographic Notification Toasts (CDI Triggers) */}
+      <NotificationToastContainer notificationManager={notificationManagerRef.current} />
 
       {/* 3. Floating Bottom Companion Chat & Speech Overlay */}
       <CompanionChatOverlay
         activeAgent={activeAgent}
         messages={messages}
         onSendMessage={handleSendMessage}
+        onSendAudio={handleSendAudio}
+        voiceManager={voiceManagerRef.current}
         onClearHistory={handleClearHistory}
         isGatewayConnected={status === 'connected'}
         isRuntimeConnected={isRuntimeConnected}
@@ -373,7 +763,7 @@ export default function App() {
         onClose={() => setIsAgentSelectorOpen(false)}
       />
 
-      {/* 5. Comprehensive Centralized Settings Page with VRM Database */}
+      {/* 5. Comprehensive Centralized Settings Page with VRM Database & CDI Triggers */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -396,6 +786,8 @@ export default function App() {
         onReconnect={handleReconnect}
         logs={logs}
         onExecuteAction={handleExecuteAction}
+        notificationManager={notificationManagerRef.current}
+        configManager={configManagerRef.current}
       />
     </main>
   );

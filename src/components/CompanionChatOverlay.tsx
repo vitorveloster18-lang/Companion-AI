@@ -10,10 +10,14 @@ import { MessageInput } from './MessageInput';
 import { MessageList } from './MessageList';
 import { Bot, History, X, Trash2, Sparkles, Terminal } from 'lucide-react';
 
+import { VoiceLipSyncManager } from '../core/VoiceLipSyncManager';
+
 interface CompanionChatOverlayProps {
   activeAgent: Agent;
   messages: Message[];
   onSendMessage: (text: string) => void;
+  onSendAudio?: (audio: { format: string; data: string; duration: number }) => void;
+  voiceManager?: VoiceLipSyncManager;
   onClearHistory: () => void;
   isGatewayConnected: boolean;
   isRuntimeConnected: boolean;
@@ -24,6 +28,8 @@ export const CompanionChatOverlay: React.FC<CompanionChatOverlayProps> = ({
   activeAgent,
   messages,
   onSendMessage,
+  onSendAudio,
+  voiceManager,
   onClearHistory,
   isGatewayConnected,
   isRuntimeConnected,
@@ -121,6 +127,8 @@ export const CompanionChatOverlay: React.FC<CompanionChatOverlayProps> = ({
         {/* Floating Input Card with ON/OFF Indicator */}
         <MessageInput
           onSendMessage={onSendMessage}
+          onSendAudio={onSendAudio}
+          voiceManager={voiceManager}
           disabled={!isGatewayConnected}
           placeholder={
             !isGatewayConnected

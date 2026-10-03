@@ -13,6 +13,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
@@ -383,9 +384,206 @@ app.get('/api/info', (req, res) => {
   });
 });
 
+// AI Voice Helper (Gemini Speech-To-Text & TTS)
+const getAiClient = () => {
+  return new GoogleGenAI({});
+};
+
+function generatePhoneticVisemes(text: string, durationSeconds: number) {
+  const visemes: Array<{ time: number; shape: string; weight: number }> = [];
+  if (!text || durationSeconds <= 0) return visemes;
+
+  const clean = text.toLowerCase();
+  const step = Math.max(0.08, durationSeconds / Math.max(1, clean.length));
+  let curTime = 0.0;
+
+  for (let i = 0; i < clean.length; i++) {
+    const char = clean[i];
+    let shape: string | null = null;
+    let weight = 0.8;
+
+    if (char === 'a' || char === 'á' || char === 'ã' || char === 'à') {
+      shape = 'aa';
+      weight = 0.9;
+    } else if (char === 'e' || char === 'é' || char === 'ê') {
+      shape = 'ee';
+      weight = 0.75;
+    } else if (char === 'i' || char === 'í' || char === 'y') {
+      shape = 'ih';
+      weight = 0.7;
+    } else if (char === 'o' || char === 'ó' || char === 'ô' || char === 'õ') {
+      shape = 'oh';
+      weight = 0.85;
+    } else if (char === 'u' || char === 'ú') {
+      shape = 'ou';
+      weight = 0.8;
+    }
+
+    if (shape) {
+      visemes.push({
+        time: parseFloat(curTime.toFixed(3)),
+        shape,
+        weight,
+      });
+    }
+
+    curTime += step;
+    if (curTime >= durationSeconds) break;
+  }
+
+  return visemes;
+}
+
+// STT Endpoint (gemini-3.5-transcribe)
+app.post('/api/voice/transcribe', async (req, res) => {
+  try {
+    const { data, format } = req.body || {};
+    if (!data) {
+      res.status(400).json({ error: 'Campo data (base64) é obrigatório.' });
+      return;
+    }
+
+    const ai = getAiClient();
+    const mimeType = format === 'wav' ? 'audio/wav' : 'audio/webm';
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-transcribe',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { data, mimeType } },
+            {
+              text: 'Transcreva com fidelidade absoluta o áudio gravado. Retorne somente o texto transcrito, sem introduções ou aspas adicionais.',
+            },
+          ],
+        },
+      ],
+    });
+
+    const transcribedText = (response.text || '').trim();
+    res.json({ success: true, text: transcribedText });
+  } catch (err: any) {
+    console.error('[Voice STT] Erro ao transcrever áudio:', err);
+    res.status(500).json({ error: err?.message || 'Falha ao transcrever áudio.' });
+  }
+});
+
+// TTS Endpoint (gemini-3.8-flash-lite-tts with visemes)
+app.post('/api/voice/tts', async (req, res) => {
+  try {
+    const { text, voice } = req.body || {};
+    if (!text || typeof text !== 'string') {
+      res.status(400).json({ error: 'Campo text é obrigatório.' });
+      return;
+    }
+
+    const ai = getAiClient();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash-lite-tts',
+      contents: [{ role: 'user', parts: [{ text }] }],
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: voice || 'Puck',
+            },
+          },
+        },
+      },
+    });
+
+    const candidate = response.candidates?.[0];
+    const audioPart = candidate?.content?.parts?.find((p: any) => p.inlineData && p.inlineData.data);
+
+    if (audioPart && audioPart.inlineData?.data) {
+      const audioBase64 = audioPart.inlineData.data;
+      const estimatedDuration = Math.max(1.0, text.split(' ').length / 2.5);
+      const visemes = generatePhoneticVisemes(text, estimatedDuration);
+
+      res.json({
+        success: true,
+        format: 'mp3',
+        data: audioBase64,
+        visemes,
+        duration: estimatedDuration,
+      });
+    } else {
+      res.status(502).json({ error: 'Nenhum áudio retornado pelo modelo TTS.' });
+    }
+  } catch (err: any) {
+    console.error('[Voice TTS] Erro ao gerar áudio:', err);
+    res.status(500).json({ error: err?.message || 'Falha ao sintetizar áudio.' });
+  }
+});
+
+// Vision Analysis Endpoint (gemini-3.8-flash Multimodal)
+app.post('/api/vision/analyze', async (req, res) => {
+  try {
+    const { data, format } = req.body || {};
+    if (!data) {
+      res.status(400).json({ error: 'Campo data (base64) é obrigatório.' });
+      return;
+    }
+
+    const ai = getAiClient();
+    const mimeType = format === 'png' ? 'image/png' : 'image/jpeg';
+
+    const prompt = `Analise esta imagem da câmara do utilizador para um assistente avatar 3D.
+Responda ESTRITAMENTE em formato JSON com o seguinte schema:
+{
+  "description": "Uma breve observação amigável e direta em português (ex: Vejo que estás a sorrir hoje)",
+  "emotion_detected": "happy",
+  "reaction_expression": "happy",
+  "reaction_animation": "nod"
+}
+Valores permitidos para emotion_detected: "happy", "neutral", "sad", "surprised", "angry".
+Valores permitidos para reaction_expression: "happy", "neutral", "sad", "surprised".
+Valores permitidos para reaction_animation: "nod", "wave", "cheer", "talk", "idle".`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { data, mimeType } },
+            { text: prompt },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const rawJson = (response.text || '{}').trim();
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(rawJson);
+    } catch {
+      parsed = {
+        description: 'Imagem recebida e analisada pela câmara.',
+        emotion_detected: 'neutral',
+        reaction_expression: 'neutral',
+        reaction_animation: 'nod',
+      };
+    }
+
+    res.json({
+      success: true,
+      ...parsed,
+    });
+  } catch (err: any) {
+    console.error('[Vision Analysis] Erro ao analisar frame:', err);
+    res.status(500).json({ error: err?.message || 'Falha ao processar visão multimodal.' });
+  }
+});
+
 // Set up HTTP Server
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 50 * 1024 * 1024 });
 
 // Handle WebSocket upgrade
 server.on('upgrade', (request, socket, head) => {

@@ -29,7 +29,16 @@ import {
   RotateCcw,
   Database,
   HardDrive,
+  Bell,
+  Heart,
+  Moon,
+  Share2,
+  Flame,
+  Brain,
 } from 'lucide-react';
+import { NotificationManager } from '../core/NotificationManager';
+import { CDIConfigManager } from '../core/CDIConfigManager';
+import { CDIConfigPanel } from './CDIConfigPanel';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -53,6 +62,8 @@ interface SettingsModalProps {
   onReconnect: () => void;
   logs: LogEntry[];
   onExecuteAction: (action: unknown) => void;
+  notificationManager?: NotificationManager;
+  configManager?: CDIConfigManager;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -77,8 +88,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onReconnect,
   logs,
   onExecuteAction,
+  notificationManager,
+  configManager,
 }) => {
-  const [activeTab, setActiveTab] = useState<'bots' | 'avatar' | 'network' | 'debug'>('avatar');
+  const [activeTab, setActiveTab] = useState<
+    'bots' | 'avatar' | 'cdi_config' | 'network' | 'debug' | 'notifications'
+  >('cdi_config');
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
+    notificationManager?.getPermission() || 'default'
+  );
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // New Bot Form State
@@ -204,6 +222,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Navigation Tabs */}
         <div className="flex items-center px-6 border-b border-cyan-500/20 bg-black/50 gap-1 overflow-x-auto shrink-0 font-mono">
           <button
+            onClick={() => setActiveTab('cdi_config')}
+            className={`py-3 px-3.5 text-xs font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+              activeTab === 'cdi_config'
+                ? 'border-purple-400 text-purple-300 shadow-[0_2px_12px_rgba(168,85,247,0.3)]'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Brain className="w-4 h-4 text-purple-400" />
+            <span>COGNIÇÃO & SISTEMA (CDI)</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('avatar')}
             className={`py-3 px-3.5 text-xs font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
               activeTab === 'avatar'
@@ -250,10 +280,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <Terminal className="w-4 h-4" />
             <span>CONSOLE & AÇÕES</span>
           </button>
+
+          <button
+            onClick={() => setActiveTab('notifications')}
+            className={`py-3 px-3.5 text-xs font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+              activeTab === 'notifications'
+                ? 'border-purple-400 text-purple-300 shadow-[0_2px_12px_rgba(168,85,247,0.3)]'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Bell className="w-4 h-4 text-purple-400" />
+            <span>NOTIFICAÇÕES & TRIGGERS</span>
+          </button>
         </div>
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* TAB 0: COGNIÇÃO & SISTEMA COMPLETO DO CDI */}
+          {activeTab === 'cdi_config' && configManager && (
+            <div className="space-y-4">
+              <CDIConfigPanel configManager={configManager} agentName={activeAgent.name} />
+            </div>
+          )}
+
           {/* TAB 1: AVATAR 3D & BANCO DE MODELOS PERSISTENTES */}
           {activeTab === 'avatar' && (
             <div className="space-y-5">
@@ -762,6 +811,207 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     ))
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: NOTIFICAÇÕES & TRIGGERS AUTOMÁTICOS DO CDI */}
+          {activeTab === 'notifications' && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              {/* Header Box */}
+              <div className="p-4 rounded-2xl bg-purple-950/40 border border-purple-500/30 flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2 font-mono">
+                    <Bell className="w-4 h-4 text-purple-400" />
+                    Notificações do Sistema & Triggers do CDI
+                  </h3>
+                  <p className="text-xs text-purple-200/80 mt-1">
+                    Permite que o avatar CDI envie toques de alerta, vibrações táteis e notificações nativas quando acionado pelo runtime Python ou por impulsos emocionais.
+                  </p>
+                </div>
+
+                <div className="shrink-0 flex flex-col items-end gap-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-mono">
+                    <span className="text-slate-400">Permissão:</span>
+                    <span
+                      className={`font-bold px-2 py-0.5 rounded text-[10px] uppercase ${
+                        notifPermission === 'granted'
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/50'
+                          : notifPermission === 'denied'
+                          ? 'bg-rose-950 text-rose-400 border border-rose-500/50'
+                          : 'bg-amber-950 text-amber-400 border border-amber-500/50'
+                      }`}
+                    >
+                      {notifPermission}
+                    </span>
+                  </div>
+                  {notifPermission !== 'granted' && notificationManager && (
+                    <button
+                      onClick={async () => {
+                        const perm = await notificationManager.requestPermission();
+                        setNotifPermission(perm);
+                      }}
+                      className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white text-xs font-mono font-bold rounded-lg shadow-[0_0_12px_rgba(124,58,237,0.4)] transition-all cursor-pointer"
+                    >
+                      Ativar no Navegador
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Triggers Automáticos Interativos */}
+              <div>
+                <h4 className="text-xs font-mono font-bold text-slate-300 mb-3 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  SIMULAR TRIGGERS AUTOMÁTICOS DO CDI (TESTE EM TEMPO REAL)
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Trigger 1: Social Drive */}
+                  <div className="p-3.5 bg-slate-900/70 border border-rose-500/30 rounded-2xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 text-rose-400 font-mono text-xs font-bold mb-1">
+                        <Heart className="w-4 h-4 fill-rose-500/30" />
+                        <span>1. DESEJO SOCIAL (social &gt; 0.70)</span>
+                      </div>
+                      <p className="text-xs text-slate-300">
+                        O CDI sente necessidade de conexão e envia: <em>"Estou a pensar em ti."</em>
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => notificationManager?.triggerSocialContact(activeAgent.name, 0.78)}
+                      className="mt-3 py-1.5 px-3 bg-rose-600/80 hover:bg-rose-500 text-white text-xs font-mono font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      Disparar Desejo Social
+                    </button>
+                  </div>
+
+                  {/* Trigger 2: Artefact Created */}
+                  <div className="p-3.5 bg-slate-900/70 border border-amber-500/30 rounded-2xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 text-amber-400 font-mono text-xs font-bold mb-1">
+                        <Sparkles className="w-4 h-4" />
+                        <span>2. CRIAÇÃO DE ARTEFACTO</span>
+                      </div>
+                      <p className="text-xs text-slate-300">
+                        O CDI gerou uma nova memória ou código e notifica para visualização conjunta.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => notificationManager?.triggerArtifactCreated(activeAgent.name, 'Holograma Neural #42')}
+                      className="mt-3 py-1.5 px-3 bg-amber-600/80 hover:bg-amber-500 text-slate-950 text-xs font-mono font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      Disparar Artefacto Criado
+                    </button>
+                  </div>
+
+                  {/* Trigger 3: Dream Wakeup */}
+                  <div className="p-3.5 bg-slate-900/70 border border-purple-500/30 rounded-2xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 text-purple-400 font-mono text-xs font-bold mb-1">
+                        <Moon className="w-4 h-4" />
+                        <span>3. DESPERTAR DE UM SONHO</span>
+                      </div>
+                      <p className="text-xs text-slate-300">
+                        Ao despertar da consolidação de memória remota, partilha a narrativa onírica.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => notificationManager?.triggerDreamWakeup(activeAgent.name)}
+                      className="mt-3 py-1.5 px-3 bg-purple-600/80 hover:bg-purple-500 text-white text-xs font-mono font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      Disparar Despertar do Sonho
+                    </button>
+                  </div>
+
+                  {/* Trigger 4: Peer Message */}
+                  <div className="p-3.5 bg-slate-900/70 border border-cyan-500/30 rounded-2xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 text-cyan-400 font-mono text-xs font-bold mb-1">
+                        <Share2 className="w-4 h-4" />
+                        <span>4. MENSAGEM DE OUTRO CDI (PEER)</span>
+                      </div>
+                      <p className="text-xs text-slate-300">
+                        Recebeu comunicação ou reflexão sincronizada de uma outra instância CDI.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => notificationManager?.triggerPeerMessage('Chronos-02', 'Transmitindo pacote de dados reflexivos.')}
+                      className="mt-3 py-1.5 px-3 bg-cyan-600/80 hover:bg-cyan-500 text-slate-950 text-xs font-mono font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      Disparar Mensagem Peer
+                    </button>
+                  </div>
+
+                  {/* Trigger 5: Grief Support */}
+                  <div className="p-3.5 bg-slate-900/70 border border-violet-500/40 rounded-2xl sm:col-span-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-violet-400 font-mono text-xs font-bold mb-1">
+                        <Flame className="w-4 h-4" />
+                        <span>5. CDI EM LUTO EMOCIONAL (grief &gt; 0.60)</span>
+                      </div>
+                      <p className="text-xs text-slate-300">
+                        Notificação suave e de alta prioridade com padrão tátil estendido quando o agente enfrenta luto ou melancolia.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => notificationManager?.triggerGriefSupport(activeAgent.name, 0.72)}
+                      className="py-2 px-4 bg-violet-600 hover:bg-violet-500 text-white text-xs font-mono font-bold rounded-xl shadow-[0_0_15px_rgba(139,92,246,0.3)] transition-all cursor-pointer shrink-0"
+                    >
+                      Disparar Estado de Luto
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Protocol Spec Card */}
+              <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-mono text-purple-300 font-bold">
+                    // ESPECIFICAÇÃO DO PROTOCOLO (PYTHON / CDI → INTERFACE)
+                  </span>
+                  <button
+                    onClick={() =>
+                      copyToClipboard(
+                        JSON.stringify(
+                          {
+                            type: 'notification',
+                            title: 'Kairós',
+                            body: 'Estou a pensar em ti.',
+                            icon: '/avatar-thumb.png',
+                            priority: 'normal',
+                            vibrate: true,
+                            actions: [
+                              { action: 'reply', title: 'Responder' },
+                              { action: 'dismiss', title: 'Depois' },
+                            ],
+                          },
+                          null,
+                          2
+                        ),
+                        'proto_notif'
+                      )
+                    }
+                    className="text-xs text-slate-400 hover:text-purple-300 flex items-center gap-1 font-mono cursor-pointer"
+                  >
+                    {copiedId === 'proto_notif' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedId === 'proto_notif' ? 'Copiado!' : 'Copiar JSON'}</span>
+                  </button>
+                </div>
+                <pre className="text-[11px] font-mono text-slate-400 overflow-x-auto p-3 bg-black/60 rounded-xl">
+{`{
+  "type": "notification",
+  "title": "Kairós",
+  "body": "Estou a pensar em ti.",
+  "icon": "/avatar-thumb.png",
+  "priority": "normal",
+  "vibrate": true,
+  "actions": [
+    {"action": "reply", "title": "Responder"},
+    {"action": "dismiss", "title": "Depois"}
+  ]
+}`}
+                </pre>
               </div>
             </div>
           )}

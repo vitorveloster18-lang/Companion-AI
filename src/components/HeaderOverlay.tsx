@@ -1,103 +1,93 @@
 /**
- * HeaderOverlay: Cyberpunk HUD top navigation bar.
- * Clean, minimal, futuristic aesthetics with discrete ON/OFF telemetry.
+ * HeaderOverlay: Ultra-clean, single-button Cyberpunk navigation trigger.
+ * Removes all clutter, badges, and icons from the top screen, providing a completely
+ * pristine, unobstructed 3D avatar viewport with instant access to the Sidebar Menu.
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ConnectionStatus } from '../types/protocol';
 import { Agent } from '../agents/AgentTypes';
-import { Settings, Bot, ChevronDown, Radio } from 'lucide-react';
+import { Menu, Users } from 'lucide-react';
+import { MultiCDIManager, ViewMode } from '../core/MultiCDIManager';
 
 interface HeaderOverlayProps {
   status: ConnectionStatus;
   activeAgent: Agent;
   isRuntimeConnected: boolean;
-  onOpenAgentSelector: () => void;
-  onOpenSettings: () => void;
+  isSidebarOpen?: boolean;
+  onToggleSidebar: () => void;
+  multiCDIManager?: MultiCDIManager;
 }
 
 export const HeaderOverlay: React.FC<HeaderOverlayProps> = ({
   status,
   activeAgent,
   isRuntimeConnected,
-  onOpenAgentSelector,
-  onOpenSettings,
+  isSidebarOpen = false,
+  onToggleSidebar,
+  multiCDIManager,
 }) => {
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    multiCDIManager ? multiCDIManager.getViewMode() : 'focus'
+  );
+
+  useEffect(() => {
+    if (!multiCDIManager) return;
+    return multiCDIManager.subscribe((state) => {
+      setViewMode(state.viewMode);
+    });
+  }, [multiCDIManager]);
+
   return (
-    <header className="absolute top-4 inset-x-4 z-30 flex items-center justify-between pointer-events-none select-none">
-      {/* Left: Minimal Cyberpunk Bot Pill */}
-      <div className="flex items-center gap-2 pointer-events-auto">
-        <button
-          onClick={onOpenAgentSelector}
-          className="relative flex items-center gap-2.5 px-3 py-1.5 bg-black/80 hover:bg-black/95 backdrop-blur-2xl border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl shadow-[0_0_20px_rgba(0,240,255,0.1)] transition-all cursor-pointer group"
-          title="Clique para alternar bot ou agente"
-        >
-          {/* Cyberpunk Top Accent Bar */}
-          <div className="absolute -top-[1px] left-3 w-4 h-[1.5px] bg-cyan-400 shadow-[0_0_6px_#00f0ff]" />
+    <header className="absolute top-3.5 sm:top-4 left-3.5 sm:left-4 z-30 pointer-events-none select-none">
+      {/* Sleek, Single Cyberpunk Menu Button */}
+      <button
+        onClick={onToggleSidebar}
+        title="Abrir Central de Controlo e Menus"
+        className={`pointer-events-auto relative flex items-center gap-2.5 px-3.5 py-2 bg-black/80 hover:bg-black/95 backdrop-blur-2xl border rounded-2xl shadow-[0_0_25px_rgba(0,240,255,0.18)] transition-all cursor-pointer group hover:scale-105 ${
+          isSidebarOpen
+            ? 'border-cyan-400 text-cyan-300 shadow-[0_0_25px_rgba(0,240,255,0.4)]'
+            : 'border-cyan-500/30 hover:border-cyan-400/70 text-slate-200'
+        }`}
+      >
+        {/* Top Cyan Neon Accent Line */}
+        <div className="absolute -top-[1px] left-4 w-5 h-[1.5px] bg-cyan-400 shadow-[0_0_6px_#00f0ff]" />
 
-          <div className="w-7 h-7 rounded-lg bg-cyan-950/80 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shrink-0 group-hover:scale-105 transition-transform shadow-[0_0_10px_rgba(0,240,255,0.3)]">
-            <Bot className="w-4 h-4" />
-          </div>
+        <Menu className="w-4 h-4 text-cyan-400 group-hover:rotate-90 transition-transform duration-200 shrink-0" />
 
-          <div className="text-left">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-mono font-bold text-slate-100 group-hover:text-cyan-200 transition-colors">
+        <div className="flex items-center gap-2">
+          {viewMode === 'group' ? (
+            <span className="text-xs font-mono font-bold text-purple-300 flex items-center gap-1.5">
+              <Users className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+              <span>GRUPO (4 CDIs)</span>
+            </span>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{
+                  backgroundColor: multiCDIManager?.getActiveCDI().avatar_color || '#a855f7',
+                  boxShadow: `0 0 8px ${multiCDIManager?.getActiveCDI().avatar_color || '#a855f7'}`,
+                }}
+              />
+              <span className="text-xs font-mono font-bold text-white group-hover:text-cyan-200 transition-colors">
                 {activeAgent.name}
               </span>
-              <ChevronDown className="w-3 h-3 text-cyan-400/70 group-hover:text-cyan-300 transition-colors" />
             </div>
+          )}
 
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  isRuntimeConnected
-                    ? 'bg-emerald-400 shadow-[0_0_6px_#00ff9d]'
-                    : status === 'connected'
-                    ? 'bg-amber-400'
-                    : 'bg-rose-500'
-                }`}
-              />
-              <span
-                className={`text-[10px] font-mono tracking-wider uppercase font-semibold ${
-                  isRuntimeConnected
-                    ? 'text-emerald-400'
-                    : status === 'connected'
-                    ? 'text-amber-400/80'
-                    : 'text-rose-400/80'
-                }`}
-              >
-                {isRuntimeConnected ? 'ONLINE' : 'STANDBY'}
-              </span>
-            </div>
-          </div>
-        </button>
-      </div>
-
-      {/* Right: Cyberpunk Settings Trigger */}
-      <div className="flex items-center gap-2 pointer-events-auto">
-        <button
-          onClick={onOpenSettings}
-          title="Abrir Painel de Configurações"
-          className="relative px-3 py-2 bg-black/80 hover:bg-black/95 backdrop-blur-2xl border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl shadow-[0_0_20px_rgba(0,240,255,0.1)] text-slate-200 hover:text-cyan-300 transition-all cursor-pointer group flex items-center gap-2 hover:scale-105"
-        >
-          {/* Cyberpunk Top Accent Bar */}
-          <div className="absolute -top-[1px] right-3 w-4 h-[1.5px] bg-cyan-400 shadow-[0_0_6px_#00f0ff]" />
-
-          <div className="relative">
-            <Settings className="w-4 h-4 text-cyan-400 group-hover:rotate-90 transition-transform duration-300" />
-            <span
-              className={`absolute -top-1 -right-1 h-2 w-2 rounded-full ${
-                isRuntimeConnected
-                  ? 'bg-emerald-400 shadow-[0_0_6px_#00ff9d]'
-                  : 'bg-rose-500'
-              }`}
-            />
-          </div>
-          <span className="text-xs font-mono font-semibold hidden sm:inline tracking-wider uppercase">
-            // CONFIG
-          </span>
-        </button>
-      </div>
+          {/* Connection Dot */}
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              isRuntimeConnected
+                ? 'bg-emerald-400 shadow-[0_0_6px_#00ff9d]'
+                : status === 'connected'
+                ? 'bg-amber-400'
+                : 'bg-rose-500'
+            }`}
+          />
+        </div>
+      </button>
     </header>
   );
 };

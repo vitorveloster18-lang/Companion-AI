@@ -46,6 +46,12 @@ export class AvatarController {
   private isSpeaking = false;
   private speechMouthOpen = 0;
 
+  // Lip-Sync & Viseme State
+  private activeVisemes: Array<{ time: number; shape: string; weight: number }> = [];
+  private audioPlaybackStartTime = 0;
+  private audioPlaybackDuration = 0;
+  private audioAmplitude = 0; // 0.0 to 1.0 real-time audio volume
+
   // LookAt target
   private lookAtTarget: THREE.Vector3 | null = null;
   private currentLookTarget: THREE.Vector3 = new THREE.Vector3(0, 1.4, 3);
@@ -142,16 +148,37 @@ export class AvatarController {
     this.isSpeaking = speaking;
     if (!speaking) {
       this.speechMouthOpen = 0;
+      this.activeVisemes = [];
+      this.audioAmplitude = 0;
       if (this.currentVRM?.expressionManager) {
-        try {
-          this.currentVRM.expressionManager.setValue('aa', 0);
-          this.currentVRM.expressionManager.setValue('ih', 0);
-          this.currentVRM.expressionManager.setValue('ou', 0);
-        } catch {
-          // ignore
+        const vowels = ['aa', 'ih', 'ou', 'ee', 'oh'];
+        for (const v of vowels) {
+          try {
+            this.currentVRM.expressionManager.setValue(v, 0);
+          } catch {
+            // ignore
+          }
         }
       }
+      if (this.fallbackBones.jaw) {
+        this.fallbackBones.jaw.position.y = 0;
+      }
     }
+  }
+
+  public startLipSyncAudio(duration: number, visemes?: Array<{ time: number; shape: string; weight: number }>): void {
+    this.isSpeaking = true;
+    this.audioPlaybackDuration = duration;
+    this.audioPlaybackStartTime = performance.now() / 1000;
+    this.activeVisemes = visemes ? [...visemes].sort((a, b) => a.time - b.time) : [];
+  }
+
+  public stopLipSyncAudio(): void {
+    this.setSpeaking(false);
+  }
+
+  public setAudioAmplitude(amplitude: number): void {
+    this.audioAmplitude = Math.max(0, Math.min(1, amplitude));
   }
 
   public setLookAt(target: { x: number; y: number; z: number } | null): void {
@@ -461,21 +488,68 @@ export class AvatarController {
       this.currentVRM.update(delta);
     }
 
-    // 2. Speech Viseme / Mouth Flap
+    // 2. Speech Viseme / Mouth Flap / Lip-Sync
     if (this.isSpeaking) {
-      const flap = (Math.sin(this.animationTime * 14) + 1) * 0.5 * (Math.sin(this.animationTime * 7) > 0 ? 0.8 : 0.4);
-      this.speechMouthOpen = flap;
+      if (this.activeVisemes.length > 0) {
+        const currentTime = performance.now() / 1000 - this.audioPlaybackStartTime;
+        const weights: Record<string, number> = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+        const windowSize = 0.12;
 
-      if (this.currentVRM?.expressionManager) {
-        try {
-          this.currentVRM.expressionManager.setValue('aa', flap);
-        } catch {
-          // ignore
+        for (let i = 0; i < this.activeVisemes.length; i++) {
+          const v = this.activeVisemes[i];
+          const diff = Math.abs(currentTime - v.time);
+          if (diff < windowSize) {
+            const factor = Math.max(0, 1 - diff / windowSize);
+            const shape = v.shape.toLowerCase();
+            const w = Math.min(1.0, v.weight * factor);
+            weights[shape] = Math.max(weights[shape] || 0, w);
+          }
         }
-      }
 
-      if (this.fallbackBones.jaw) {
-        this.fallbackBones.jaw.position.y = -0.01 - flap * 0.025;
+        // Add real-time audio amplitude if available
+        if (this.audioAmplitude > 0.04) {
+          weights['aa'] = Math.max(weights['aa'] || 0, this.audioAmplitude * 0.8);
+        }
+
+        let maxWeight = 0;
+        if (this.currentVRM?.expressionManager) {
+          for (const [shape, weight] of Object.entries(weights)) {
+            try {
+              this.currentVRM.expressionManager.setValue(shape, weight);
+              if (weight > maxWeight) maxWeight = weight;
+            } catch {
+              // ignore unsupported viseme
+            }
+          }
+        }
+
+        this.speechMouthOpen = maxWeight;
+        if (this.fallbackBones.jaw) {
+          this.fallbackBones.jaw.position.y = -0.01 - maxWeight * 0.03;
+        }
+      } else {
+        // Procedural speech flap boosted by audio amplitude
+        const sineFlap =
+          (Math.sin(this.animationTime * 14) + 1) *
+          0.5 *
+          (Math.sin(this.animationTime * 7) > 0 ? 0.8 : 0.4);
+        const flap = this.audioAmplitude > 0.02
+          ? Math.max(sineFlap * 0.5, this.audioAmplitude * 1.1)
+          : sineFlap;
+
+        this.speechMouthOpen = flap;
+
+        if (this.currentVRM?.expressionManager) {
+          try {
+            this.currentVRM.expressionManager.setValue('aa', Math.min(1, flap));
+          } catch {
+            // ignore
+          }
+        }
+
+        if (this.fallbackBones.jaw) {
+          this.fallbackBones.jaw.position.y = -0.01 - Math.min(1, flap) * 0.025;
+        }
       }
     } else {
       if (this.fallbackBones.jaw) {
