@@ -1,0 +1,8 @@
+{
+  "name": "Agent Body 3D",
+  "description": "Visual 3D avatar and motion executor for Python agents connected via WebSocket",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

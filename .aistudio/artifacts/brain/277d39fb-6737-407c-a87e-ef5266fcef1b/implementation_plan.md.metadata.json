@@ -1,0 +1,6 @@
+{
+  "summary":  "Plano revisado com separação arquitetural estrita: avatar_client.py permanece 100% exclusivo para ações motoras (action.*), a camada de conversação (chat.*) é isolada em ConversationManager/MessageStore no frontend (e opcional chat_client.py no Python), desacoplando AvatarController de ConversationManager.",
+  "updatedAt":  "2026-10-02T20:36:05.538863862Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
