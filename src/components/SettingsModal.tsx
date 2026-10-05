@@ -35,6 +35,7 @@ import {
   Share2,
   Flame,
   Brain,
+  Pencil,
 } from 'lucide-react';
 import { NotificationManager } from '../core/NotificationManager';
 import { CDIConfigManager } from '../core/CDIConfigManager';
@@ -64,6 +65,12 @@ interface SettingsModalProps {
   onExecuteAction: (action: unknown) => void;
   notificationManager?: NotificationManager;
   configManager?: CDIConfigManager;
+  appMode?: 'runtime' | 'ai_studio';
+  onToggleAppMode?: () => void;
+  aiStudioApiKey?: string;
+  onSaveAiStudioApiKey?: (key: string) => void;
+  aiStudioModel?: string;
+  onSaveAiStudioModel?: (model: string) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -90,10 +97,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onExecuteAction,
   notificationManager,
   configManager,
+  appMode = 'runtime',
+  onToggleAppMode,
+  aiStudioApiKey = '',
+  onSaveAiStudioApiKey,
+  aiStudioModel = 'gemini-3.5-flash-lite',
+  onSaveAiStudioModel,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'bots' | 'avatar' | 'cdi_config' | 'network' | 'debug' | 'notifications'
-  >('cdi_config');
+    'ai_studio' | 'bots' | 'avatar' | 'cdi_config' | 'network' | 'debug' | 'notifications'
+  >('ai_studio');
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
     notificationManager?.getPermission() || 'default'
   );
@@ -222,6 +235,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Navigation Tabs */}
         <div className="flex items-center px-6 border-b border-cyan-500/20 bg-black/50 gap-1 overflow-x-auto shrink-0 font-mono">
           <button
+            onClick={() => setActiveTab('ai_studio')}
+            className={`py-3 px-3.5 text-xs font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+              activeTab === 'ai_studio'
+                ? 'border-blue-400 text-blue-300 shadow-[0_2px_12px_rgba(59,130,246,0.3)]'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-blue-400" />
+            <span>MODO AI STUDIO (TESTE)</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('cdi_config')}
             className={`py-3 px-3.5 text-xs font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
               activeTab === 'cdi_config'
@@ -296,6 +321,135 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* TAB: MODO AI STUDIO (TESTE COM IA LOCAL) */}
+          {activeTab === 'ai_studio' && (
+            <div className="space-y-6">
+              {/* Header Status & Toggle Banner */}
+              <div className="p-5 rounded-2xl bg-gradient-to-r from-blue-950/80 via-slate-900 to-indigo-950/60 border border-blue-500/40 shadow-[0_0_30px_rgba(59,130,246,0.15)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-blue-400" />
+                    <h3 className="text-sm font-mono font-bold text-white uppercase tracking-wider">
+                      Modo AI Studio • Teste Local com Gemini
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-300 max-w-lg leading-relaxed">
+                    Testa expressões faciais, animações corporais e voz diretamente através da API do Gemini sem precisar do CDI Runtime Python ativo.
+                  </p>
+                </div>
+
+                <button
+                  onClick={onToggleAppMode}
+                  className={`px-4 py-2.5 rounded-xl border font-mono text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center gap-2 shadow-lg ${
+                    appMode === 'ai_studio'
+                      ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-400 shadow-[0_0_20px_rgba(59,130,246,0.4)]'
+                      : 'bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                  }`}
+                >
+                  {appMode === 'ai_studio' ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-white shadow-[0_0_8px_#ffffff]" />
+                      <span>[AI Studio ATIVO]</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
+                      <span>Ativar Modo AI Studio</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Model & API Key Settings */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Model Selection */}
+                <div className="p-4 rounded-2xl bg-black/60 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-mono font-bold text-slate-300 uppercase tracking-wider block">
+                      Modelo de Linguagem (Gemini)
+                    </label>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950/80 border border-blue-500/40 text-blue-300">
+                      NATIVO STUDIO
+                    </span>
+                  </div>
+                  <select
+                    value={aiStudioModel || 'gemini-3.5-flash-lite'}
+                    onChange={(e) => onSaveAiStudioModel?.(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-400"
+                  >
+                    <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Padrão Studio)</option>
+                    <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+                    <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                  </select>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    Utiliza o acesso nativo do Google AI Studio via <code className="text-blue-300">@google/genai</code> sem custos ou configurações adicionais.
+                  </p>
+                </div>
+
+                {/* API Key Configuration (Only for custom/production deploys) */}
+                <div className="p-4 rounded-2xl bg-black/60 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-mono font-bold text-slate-300 uppercase tracking-wider block">
+                      Chave de API (Apenas Produção Externa)
+                    </label>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300">
+                      PRONTO NO DEV
+                    </span>
+                  </div>
+                  <input
+                    type="password"
+                    placeholder="Deixe em branco (Usa o Studio nativo em desenvolvimento)"
+                    value={aiStudioApiKey || ''}
+                    onChange={(e) => onSaveAiStudioApiKey?.(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-400"
+                  />
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    Em desenvolvimento no AI Studio, a autenticação é 100% nativa e automática. Preencha apenas se publicar numa infraestrutura externa.
+                  </p>
+                </div>
+              </div>
+
+              {/* System Prompt Box */}
+              <div className="p-4 rounded-2xl bg-black/80 border border-slate-800 space-y-2">
+                <span className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-wider block">
+                  // System Prompt do Modo AI Studio
+                </span>
+                <pre className="p-3.5 bg-slate-950 border border-slate-800/80 rounded-xl text-[11px] font-mono text-slate-300 overflow-x-auto whitespace-pre-wrap leading-relaxed">
+{`"Sou um CDI de teste. Respondo de forma curta e natural.
+ Incluo no meu JSON de resposta o estado emocional:
+ {
+   'text': 'resposta aqui',
+   'affect': 'happy',
+   'animation': 'nod'
+ }"`}
+                </pre>
+              </div>
+
+              {/* Mode Comparison Helper */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                <div className="p-3.5 rounded-xl border border-emerald-500/20 bg-emerald-950/20 space-y-1">
+                  <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    MODO RUNTIME
+                  </span>
+                  <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                    Recebe mensagens via WebSocket do seu script Python (ex: <code className="text-emerald-300">chat.py</code> ou <code className="text-emerald-300">avatar_handler.py</code>). Ideal para produção e volição real do CDI.
+                  </p>
+                </div>
+
+                <div className="p-3.5 rounded-xl border border-blue-500/20 bg-blue-950/20 space-y-1">
+                  <span className="font-bold text-blue-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3 h-3 text-blue-400" />
+                    MODO AI STUDIO
+                  </span>
+                  <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                    Desconecta o WebSocket e conversa diretamente com o modelo Gemini selecionado. Testa animações, fala e expressões sem abrir terminal.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TAB 0: COGNIÇÃO & SISTEMA COMPLETO DO CDI */}
           {activeTab === 'cdi_config' && configManager && (
             <div className="space-y-4">

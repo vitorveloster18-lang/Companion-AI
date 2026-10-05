@@ -82,19 +82,26 @@ export class ActionExecutor {
       return;
     }
 
-    const msg = data as Partial<AgentAction>;
+    const msg = data as Partial<AgentAction> & { animation?: string; expression?: string; name?: string };
 
-    if (msg.type !== 'action' || !msg.action || !msg.id) {
+    if (msg.type !== 'action' || !msg.action) {
       return;
     }
 
+    // If ID is omitted by runtime, generate a correlation ID
+    const actionId = msg.id || `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const actionWithId: AgentAction = {
+      ...msg,
+      id: actionId,
+    } as AgentAction;
+
     try {
-      this.executeAction(msg as AgentAction);
+      this.executeAction(actionWithId);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.connection.send({
         type: 'action.failed',
-        id: msg.id,
+        id: actionId,
         error: errorMsg,
       });
     }
@@ -328,7 +335,8 @@ export class ActionExecutor {
   }
 
   private executeSetExpression(action: SetExpressionAction): void {
-    const { id, expression, intensity = 1.0 } = action;
+    const { id, intensity = 1.0 } = action;
+    const expression = action.expression || (action as any).name || (action as any).emotion;
 
     if (!expression) {
       this.connection.send({

@@ -17,6 +17,8 @@ interface HeaderOverlayProps {
   isSidebarOpen?: boolean;
   onToggleSidebar: () => void;
   multiCDIManager?: MultiCDIManager;
+  appMode?: 'runtime' | 'ai_studio';
+  onToggleAppMode?: () => void;
 }
 
 export const HeaderOverlay: React.FC<HeaderOverlayProps> = ({
@@ -26,6 +28,8 @@ export const HeaderOverlay: React.FC<HeaderOverlayProps> = ({
   isSidebarOpen = false,
   onToggleSidebar,
   multiCDIManager,
+  appMode = 'runtime',
+  onToggleAppMode,
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>(
     multiCDIManager ? multiCDIManager.getViewMode() : 'focus'
@@ -39,7 +43,7 @@ export const HeaderOverlay: React.FC<HeaderOverlayProps> = ({
   }, [multiCDIManager]);
 
   return (
-    <header className="absolute top-3.5 sm:top-4 left-3.5 sm:left-4 z-30 pointer-events-none select-none">
+    <header className="absolute top-3.5 sm:top-4 left-3.5 sm:left-4 z-30 pointer-events-none select-none flex items-center gap-2 sm:gap-2.5">
       {/* Sleek, Single Cyberpunk Menu Button */}
       <button
         onClick={onToggleSidebar}
@@ -59,15 +63,15 @@ export const HeaderOverlay: React.FC<HeaderOverlayProps> = ({
           {viewMode === 'group' ? (
             <span className="text-xs font-mono font-bold text-purple-300 flex items-center gap-1.5">
               <Users className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
-              <span>GRUPO (4 CDIs)</span>
+              <span>VISTA GRUPO</span>
             </span>
           ) : (
             <div className="flex items-center gap-2">
               <span
                 className="w-2 h-2 rounded-full shrink-0"
                 style={{
-                  backgroundColor: multiCDIManager?.getActiveCDI().avatar_color || '#a855f7',
-                  boxShadow: `0 0 8px ${multiCDIManager?.getActiveCDI().avatar_color || '#a855f7'}`,
+                  backgroundColor: multiCDIManager?.getActiveCDI()?.avatar_color || '#06b6d4',
+                  boxShadow: `0 0 8px ${multiCDIManager?.getActiveCDI()?.avatar_color || '#06b6d4'}`,
                 }}
               />
               <span className="text-xs font-mono font-bold text-white group-hover:text-cyan-200 transition-colors">
@@ -79,7 +83,9 @@ export const HeaderOverlay: React.FC<HeaderOverlayProps> = ({
           {/* Connection Dot */}
           <span
             className={`w-1.5 h-1.5 rounded-full ${
-              isRuntimeConnected
+              appMode === 'ai_studio'
+                ? 'bg-blue-400 shadow-[0_0_6px_#3b82f6]'
+                : isRuntimeConnected
                 ? 'bg-emerald-400 shadow-[0_0_6px_#00ff9d]'
                 : status === 'connected'
                 ? 'bg-amber-400'
@@ -88,6 +94,35 @@ export const HeaderOverlay: React.FC<HeaderOverlayProps> = ({
           />
         </div>
       </button>
+
+      {/* Mode Toggle Button: [Runtime ON] vs [AI Studio] */}
+      {onToggleAppMode && (
+        <button
+          onClick={onToggleAppMode}
+          title={
+            appMode === 'runtime'
+              ? 'Modo Runtime Ativo: Conectado ao Python via WebSocket. Clique para mudar para Modo AI Studio.'
+              : 'Modo AI Studio Ativo: Teste direto com Gemini. Clique para reconectar ao Python Runtime.'
+          }
+          className={`pointer-events-auto relative flex items-center gap-2 px-3 py-2 bg-black/80 hover:bg-black/95 backdrop-blur-2xl border rounded-2xl transition-all cursor-pointer group hover:scale-105 font-mono text-xs font-semibold ${
+            appMode === 'runtime'
+              ? 'border-emerald-500/40 text-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:border-emerald-400'
+              : 'border-blue-500/50 text-blue-300 shadow-[0_0_20px_rgba(59,130,246,0.25)] hover:border-blue-400'
+          }`}
+        >
+          {appMode === 'runtime' ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
+              <span>[Runtime ON]</span>
+            </>
+          ) : (
+            <>
+              <span className="w-2 h-2 rounded-full bg-blue-400 shadow-[0_0_8px_#3b82f6]" />
+              <span>[AI Studio]</span>
+            </>
+          )}
+        </button>
+      )}
     </header>
   );
 };

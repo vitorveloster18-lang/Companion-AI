@@ -35,6 +35,7 @@ import {
   MemoryGalleryMessage,
   CDIListMessage,
   PeerBusEventMessage,
+  DriveItem,
 } from './types/protocol';
 import { VoiceLipSyncManager } from './core/VoiceLipSyncManager';
 import { VisionManager } from './core/VisionManager';
@@ -54,6 +55,177 @@ import { CDIMemoryGalleryModal } from './components/CDIMemoryGalleryModal';
 import { MultiCDIManager } from './core/MultiCDIManager';
 import { PeerBusDialogueOverlay } from './components/PeerBusDialogueOverlay';
 import { CyberSidebar } from './components/CyberSidebar';
+
+export interface CDIEmotionalStatePayload {
+  affect?: string;
+  affect_label?: string;
+  valence?: number;
+  arousal?: number;
+  mode?: string;
+  phase?: string;
+  drives?: Record<string, number> | DriveItem[];
+  top_drives?: DriveItem[];
+  last_decision?: string;
+}
+
+/**
+ * Automatically maps CDI emotional states (affect_label, drives, mode, last_decision)
+ * to 3D avatar facial expressions, animations, visual aura, and gaze orientation.
+ * Maintains natural dynamic idle breathing as the baseline when not actively interacting.
+ */
+let activeDecisionTimeout: any = null;
+
+function applyCDIEmotionalState(
+  payload: CDIEmotionalStatePayload,
+  avatarController?: AvatarController | null,
+  worldState?: WorldState | null
+) {
+  if (!avatarController) return;
+
+  const rawAffect = (payload.affect || payload.affect_label || '').toLowerCase().trim();
+  const decision = (payload.last_decision || '').trim().toUpperCase();
+  const mode = (payload.mode || payload.phase || 'awake').toLowerCase().trim();
+
+  let expression = 'neutral';
+  let intensity = 0.4;
+  let baseAnimation = 'idle';
+  let lookTarget: { x: number; y: number; z: number } | null = { x: 0, y: 1.4, z: 2.8 };
+
+  // ----------------------------------------------------
+  // 1. EXPRESSÕES FACIAIS BASEADAS NO AFFECT
+  // ----------------------------------------------------
+  if (['wondering', 'curious', 'curioso', 'deslumbramento'].some((k) => rawAffect.includes(k))) {
+    expression = 'surprised';
+    intensity = 0.6;
+  } else if (['happy', 'engaged', 'animado', 'alegre', 'content'].some((k) => rawAffect.includes(k))) {
+    expression = 'happy';
+    intensity = 0.8;
+  } else if (['calm', 'relaxed', 'calmo', 'tranquilo', 'peaceful'].some((k) => rawAffect.includes(k))) {
+    expression = 'neutral';
+    intensity = 0.3;
+  } else if (['grieving', 'grief', 'sad', 'triste', 'luto', 'melancholy'].some((k) => rawAffect.includes(k))) {
+    expression = 'sad';
+    intensity = 0.7;
+    baseAnimation = 'idle_slow';
+  } else if (['tense', 'angry', 'irritado', 'bravo', 'frustrated'].some((k) => rawAffect.includes(k))) {
+    expression = 'angry';
+    intensity = 0.5;
+  } else if (['longing', 'saudade', 'nostalgia'].some((k) => rawAffect.includes(k))) {
+    expression = 'sad';
+    intensity = 0.5;
+    baseAnimation = 'idle_slow';
+  } else if (['playful', 'brincalhao', 'divertido'].some((k) => rawAffect.includes(k))) {
+    expression = 'happy';
+    intensity = 0.9;
+  } else if (payload.valence !== undefined) {
+    if (payload.valence > 0.3) {
+      expression = 'happy';
+      intensity = 0.7;
+    } else if (payload.valence < -0.3) {
+      expression = 'sad';
+      intensity = 0.7;
+      baseAnimation = 'idle_slow';
+    }
+  }
+
+  // ----------------------------------------------------
+  // 2. GAZE EPOSTURA BASEADA NOS DRIVES
+  // ----------------------------------------------------
+  let social = 0.5;
+  let wonder = 0.5;
+  let grief = 0.0;
+
+  const extractDrive = (key: string, val: number) => {
+    const k = key.toLowerCase();
+    if (k.includes('social')) social = val;
+    else if (k.includes('wonder') || k.includes('deslumbramento')) wonder = val;
+    else if (k.includes('grief') || k.includes('luto')) grief = val;
+  };
+
+  if (payload.drives) {
+    if (Array.isArray(payload.drives)) {
+      for (const d of payload.drives) {
+        if (d && typeof d === 'object') extractDrive(String(d.name || ''), Number(d.value ?? 0));
+      }
+    } else if (typeof payload.drives === 'object') {
+      for (const [k, v] of Object.entries(payload.drives)) {
+        extractDrive(k, Number(v ?? 0));
+      }
+    }
+  }
+
+  if (payload.top_drives && Array.isArray(payload.top_drives)) {
+    for (const d of payload.top_drives) {
+      if (d && typeof d === 'object') extractDrive(String(d.name || ''), Number(d.value ?? 0));
+    }
+  }
+
+  if (social < 0.20) {
+    lookTarget = { x: 1.2, y: 1.2, z: 1.8 }; // olhar tímido lateral
+  } else if (wonder > 0.75) {
+    lookTarget = { x: 0, y: 1.8, z: 2.2 }; // leve olhar elevado
+  }
+
+  if (grief > 0.60) {
+    expression = 'sad';
+    baseAnimation = 'idle_slow';
+  }
+
+  // ----------------------------------------------------
+  // 3. COMPORTAMENTOS BASEADOS NO MODO (awake / sleep / dream)
+  // ----------------------------------------------------
+  if (mode.includes('sleep') || mode.includes('deep_sleep') || mode.includes('rem')) {
+    avatarController.setMode('sleep');
+    baseAnimation = 'sleep';
+    expression = 'blink';
+    intensity = 1.0;
+  } else if (mode.includes('dream') || mode.includes('meditation')) {
+    avatarController.setMode('dream');
+    baseAnimation = 'dream';
+    expression = 'relaxed';
+    intensity = 0.8;
+  } else {
+    avatarController.setMode('awake');
+  }
+
+  // ----------------------------------------------------
+  // 4. APLICAR AO AVATAR CONTROLLER E WORLD STATE
+  // ----------------------------------------------------
+  avatarController.setExpression(expression, intensity);
+  worldState?.setExpression(expression, intensity);
+  avatarController.setLookAt(lookTarget);
+
+  // If a transient action decision occurred (e.g. INITIATE_CONTACT)
+  if (decision && decision !== 'NONE' && decision !== 'IDLE') {
+    let transientAnim = '';
+    if (decision === 'INITIATE_CONTACT') {
+      transientAnim = 'wave';
+    } else if (decision === 'CREATE_ARTIFACT') {
+      transientAnim = 'cheer';
+    } else if (decision === 'EMERGENT_EXPLORE') {
+      transientAnim = 'nod';
+    }
+
+    if (transientAnim && !worldState?.getState().isSpeaking) {
+      if (activeDecisionTimeout) clearTimeout(activeDecisionTimeout);
+      avatarController.setAnimation(transientAnim);
+      worldState?.setAnimation(transientAnim);
+
+      // Return smoothly to natural baseline idle after 3.5 seconds
+      activeDecisionTimeout = setTimeout(() => {
+        avatarController.setAnimation(baseAnimation);
+        worldState?.setAnimation(baseAnimation);
+      }, 3500);
+      return;
+    }
+  }
+
+  // Default baseline animation when not speaking or executing a transient gesture
+  if (!worldState?.getState().isSpeaking) {
+    avatarController.setAnimation(baseAnimation);
+    worldState?.setAnimation(baseAnimation);
+  }
+}
 
 export default function App() {
   // 1. Core Managers (Singletons)
@@ -107,6 +279,57 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [worldState, setWorldState] = useState<AvatarState>(worldStateRef.current.getState());
 
+  // Mode: 'runtime' (Python WebSocket) vs 'ai_studio' (Local test with Gemini)
+  const [appMode, setAppMode] = useState<'runtime' | 'ai_studio'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('cdi_app_mode') as 'runtime' | 'ai_studio') || 'runtime';
+    }
+    return 'runtime';
+  });
+  const [aiStudioApiKey, setAiStudioApiKey] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('cdi_ai_studio_api_key') || '';
+    }
+    return '';
+  });
+  const [aiStudioModel, setAiStudioModel] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('cdi_ai_studio_model') || 'gemini-3.5-flash-lite';
+    }
+    return 'gemini-3.5-flash-lite';
+  });
+
+  const handleToggleAppMode = useCallback(() => {
+    setAppMode((prev) => {
+      const next = prev === 'runtime' ? 'ai_studio' : 'runtime';
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('cdi_app_mode', next);
+      }
+      if (next === 'ai_studio') {
+        // Disconnect WebSocket in AI Studio test mode
+        connectionRef.current.disconnect();
+      } else {
+        // Reconnect WebSocket in Runtime mode
+        connectionRef.current.reconnect();
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSaveAiStudioApiKey = useCallback((key: string) => {
+    setAiStudioApiKey(key);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('cdi_ai_studio_api_key', key);
+    }
+  }, []);
+
+  const handleSaveAiStudioModel = useCallback((model: string) => {
+    setAiStudioModel(model);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('cdi_ai_studio_model', model);
+    }
+  }, []);
+
   // 3. Database: Refresh Saved VRM Models
   const refreshSavedVRMs = useCallback(async () => {
     try {
@@ -125,6 +348,7 @@ export default function App() {
         const list: BotConfig[] = await res.json();
         setBots(list);
         agentManagerRef.current.setBots(list);
+        multiCDIManagerRef.current.syncWithBots(list);
       }
     } catch (err) {
       console.warn('Erro ao carregar bots:', err);
@@ -179,13 +403,16 @@ export default function App() {
           if (Array.isArray(botList)) {
             setBots(botList);
             agentMgr.setBots(botList);
+            multiCDIManagerRef.current.syncWithBots(botList);
           }
         } else if (msg.type === 'bot.status') {
           const { bot_id, is_online } = msg as { bot_id?: string; is_online?: boolean };
           if (bot_id) {
-            setBots((prev) =>
-              prev.map((b) => (b.id === bot_id ? { ...b, is_online: Boolean(is_online) } : b))
-            );
+            setBots((prev) => {
+              const next = prev.map((b) => (b.id === bot_id ? { ...b, is_online: Boolean(is_online) } : b));
+              multiCDIManagerRef.current.syncWithBots(next);
+              return next;
+            });
           }
         } else if (msg.type === 'audio.output') {
           const audioMsg = data as AudioOutputMessage;
@@ -237,10 +464,55 @@ export default function App() {
             status: 'completed',
           });
         } else if (msg.type === 'state.update') {
-          const stateMsg = data as StateUpdateMessage;
+          const stateMsg = data as StateUpdateMessage & {
+            affect_label?: string;
+            affect?: string;
+            drives?: unknown;
+            last_decision?: string;
+            mode?: string;
+          };
           if (stateMsg.data) {
             timelineStoreRef.current.updateBiometrics(stateMsg.data);
           }
+
+          const emotionalPayload: CDIEmotionalStatePayload = {
+            affect: stateMsg.data?.affect || stateMsg.affect || stateMsg.affect_label,
+            valence: stateMsg.data?.valence,
+            arousal: stateMsg.data?.arousal,
+            mode: stateMsg.data?.mode || stateMsg.mode,
+            phase: stateMsg.data?.phase,
+            drives: (stateMsg.data?.drives || stateMsg.drives || stateMsg.data?.top_drives) as Record<string, number> | DriveItem[],
+            top_drives: stateMsg.data?.top_drives,
+            last_decision: stateMsg.data?.last_decision || stateMsg.last_decision,
+          };
+
+          applyCDIEmotionalState(
+            emotionalPayload,
+            avatarControllerRef.current,
+            worldStateRef.current
+          );
+        } else if (msg.type === 'cdi.state' || msg.type === 'affect.update') {
+          const raw = data as Record<string, unknown>;
+          const dataSub = raw.data as Record<string, unknown> | undefined;
+          const emotionalPayload: CDIEmotionalStatePayload = {
+            affect: (dataSub?.affect || raw.affect || raw.affect_label) as string | undefined,
+            valence: (dataSub?.valence ?? raw.valence) as number | undefined,
+            arousal: (dataSub?.arousal ?? raw.arousal) as number | undefined,
+            mode: (dataSub?.mode || raw.mode) as string | undefined,
+            phase: (dataSub?.phase || raw.phase) as string | undefined,
+            drives: (dataSub?.drives || raw.drives || dataSub?.top_drives) as Record<string, number> | DriveItem[],
+            top_drives: (dataSub?.top_drives || raw.top_drives) as DriveItem[] | undefined,
+            last_decision: (dataSub?.last_decision || raw.last_decision) as string | undefined,
+          };
+          applyCDIEmotionalState(
+            emotionalPayload,
+            avatarControllerRef.current,
+            worldStateRef.current
+          );
+        } else if (msg.type === 'action') {
+          actionExecutorRef.current?.handleIncomingMessage(msg);
+        } else if (typeof msg.type === 'string' && msg.type.startsWith('chat.')) {
+          conversationManagerRef.current.handleIncomingMessage(data);
         } else if (msg.type === 'timeline.event') {
           const timelineMsg = data as CDITimelineEventMessage;
           if (timelineMsg.event) {
@@ -449,12 +721,52 @@ export default function App() {
     });
   }, [activeAgent.name, activeAgent.id]);
 
-  // Automatic 3D Scene Synchronization based on CDI Affect / Mode
+  // Synchronize Speech State with Avatar LipSync and Animation
+  useEffect(() => {
+    conversationManagerRef.current.setOnSpeechStateChange((isSpeaking, textChunk) => {
+      if (isSpeaking) {
+        avatarControllerRef.current?.setSpeaking(true);
+        avatarControllerRef.current?.setAnimation('talk');
+        worldStateRef.current.setSpeaking(true);
+        worldStateRef.current.setAnimation('talk');
+        if (textChunk && textChunk.length > 0) {
+          avatarControllerRef.current?.setAudioAmplitude(0.65);
+        }
+      } else {
+        avatarControllerRef.current?.setSpeaking(false);
+        avatarControllerRef.current?.setAnimation('idle');
+        worldStateRef.current.setSpeaking(false);
+        worldStateRef.current.setAnimation('idle');
+      }
+    });
+  }, []);
+
+  // Synchronize Python Runtime Connection State with MultiCDI
+  useEffect(() => {
+    multiCDIManagerRef.current.setRuntimeConnected(isRuntimeConnected);
+  }, [isRuntimeConnected]);
+
+  // Automatic 3D Scene Synchronization & Emotional State control based on CDI Affect / Drives
   useEffect(() => {
     return timelineStoreRef.current.subscribe((timelineState) => {
       const affect = timelineState.biometrics.affect || 'wondering';
       const mode = timelineState.biometrics.mode || 'awake';
       setCurrentAffect(affect);
+
+      // Control 3D avatar expression and animation automatically
+      applyCDIEmotionalState(
+        {
+          affect,
+          valence: timelineState.biometrics.valence,
+          arousal: timelineState.biometrics.arousal,
+          mode,
+          phase: timelineState.biometrics.phase,
+          top_drives: timelineState.biometrics.top_drives,
+          last_decision: timelineState.biometrics.last_decision,
+        },
+        avatarControllerRef.current,
+        worldStateRef.current
+      );
 
       if (scene3DManager) {
         scene3DManager.handleCDIAffectChange(affect, mode, worldState.isSpeaking);
@@ -560,20 +872,123 @@ export default function App() {
   }, [refreshSavedVRMs]);
 
   const handleSendMessage = useCallback(
-    (text: string) => {
-      conversationManagerRef.current.sendMessage(text, activeAgent.id);
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
 
-      // If offline or disconnected from Gateway, queue message for background sync
-      if (!offlineSyncManagerRef.current.getIsOnline() || status !== 'connected') {
+      if (appMode === 'ai_studio') {
+        const userMsgId = `usr_${Date.now()}`;
+        const agentRespId = `resp_${Date.now()}`;
+        const now = Date.now();
+
+        // 1. Add user message
+        messageStoreRef.current.addMessage(activeAgent.id, {
+          id: userMsgId,
+          role: 'user',
+          content: trimmed,
+          timestamp: now,
+          agentId: activeAgent.id,
+          status: 'completed',
+        });
+
+        // 2. Add placeholder agent message
+        messageStoreRef.current.addMessage(activeAgent.id, {
+          id: agentRespId,
+          role: 'agent',
+          content: '',
+          timestamp: now + 1,
+          agentId: activeAgent.id,
+          status: 'sending',
+        });
+
+        try {
+          const res = await fetch('/api/ai-studio/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: trimmed,
+              history: messageStoreRef.current.getMessages(activeAgent.id),
+              apiKey: aiStudioApiKey || undefined,
+              model: aiStudioModel || 'gemini-3.5-flash-lite',
+            }),
+          });
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.error || `HTTP ${res.status}`);
+          }
+
+          const data = await res.json();
+          const replyText = data.text || 'Processamento concluído.';
+          const replyAffect = data.affect || 'happy';
+          const replyAnimation = data.animation || 'nod';
+
+          // 3. Update agent message content
+          messageStoreRef.current.updateMessage(activeAgent.id, agentRespId, (prev) => ({
+            ...prev,
+            content: replyText,
+            status: 'completed',
+          }));
+
+          // 4. Trigger speech state and animation on avatar
+          avatarControllerRef.current?.setSpeaking(true);
+          avatarControllerRef.current?.setAnimation(replyAnimation === 'idle' ? 'talk' : replyAnimation);
+          worldStateRef.current.setSpeaking(true);
+          worldStateRef.current.setAnimation(replyAnimation === 'idle' ? 'talk' : replyAnimation);
+
+          // 5. Apply emotional reaction
+          applyCDIEmotionalState(
+            {
+              affect: replyAffect,
+              last_decision:
+                replyAnimation === 'cheer'
+                  ? 'CREATE_ARTIFACT'
+                  : replyAnimation === 'nod'
+                  ? 'EMERGENT_EXPLORE'
+                  : replyAnimation === 'thinking'
+                  ? 'WRITE_TO_JOURNAL'
+                  : replyAnimation === 'wave'
+                  ? 'INITIATE_CONTACT'
+                  : undefined,
+            },
+            avatarControllerRef.current,
+            worldStateRef.current
+          );
+
+          // 6. Stop speech after reading duration based on text length
+          const speechDuration = Math.min(8000, Math.max(2500, replyText.length * 65));
+          window.setTimeout(() => {
+            avatarControllerRef.current?.setSpeaking(false);
+            avatarControllerRef.current?.setAnimation('idle');
+            worldStateRef.current.setSpeaking(false);
+            worldStateRef.current.setAnimation('idle');
+          }, speechDuration);
+        } catch (err: unknown) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error('[AI Studio] Erro no chat com Gemini:', errorMsg);
+          messageStoreRef.current.updateMessage(activeAgent.id, agentRespId, (prev) => ({
+            ...prev,
+            content: `[Erro no Modo AI Studio: ${errorMsg}]`,
+            status: 'failed',
+          }));
+        }
+        return;
+      }
+
+      // MODO RUNTIME (WebSocket)
+      conversationManagerRef.current.sendMessage(trimmed, activeAgent.id);
+
+      // Deactivate local fallback when Python runtime is connected
+      if (!isRuntimeConnected && (!offlineSyncManagerRef.current.getIsOnline() || status !== 'connected')) {
         offlineSyncManagerRef.current.enqueueMessage({
           type: 'chat.message',
           id: `msg_offline_${Date.now()}`,
-          text,
+          text: trimmed,
           agent_id: activeAgent.id,
         });
       }
     },
-    [activeAgent.id, status]
+    [activeAgent.id, status, isRuntimeConnected, appMode, aiStudioApiKey, aiStudioModel]
   );
 
   const handleClearHistory = useCallback(() => {
@@ -685,6 +1100,8 @@ export default function App() {
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
         multiCDIManager={multiCDIManagerRef.current}
+        appMode={appMode}
+        onToggleAppMode={handleToggleAppMode}
       />
 
       {/* 2.0 Cyberpunk Responsive Sliding Command Center Sidebar */}
@@ -699,12 +1116,15 @@ export default function App() {
         soundtrackManager={soundtrackManagerRef.current}
         wakeWordManager={wakeWordManagerRef.current}
         activeAffect={currentAffect}
+        bots={bots}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenMemoryGallery={() => setIsMemoryGalleryOpen(true)}
         onOpenTimeline={() => setIsTimelineOpen(true)}
         onToggleVision={() => setIsVisionOpen((prev) => !prev)}
         isVisionOpen={isVisionOpen}
         onSelectAgent={handleSelectAgent}
+        appMode={appMode}
+        onToggleAppMode={handleToggleAppMode}
       />
 
       {/* 2.1 Cyberpunk Offline Status & Sync HUD Indicator */}
@@ -788,6 +1208,12 @@ export default function App() {
         onExecuteAction={handleExecuteAction}
         notificationManager={notificationManagerRef.current}
         configManager={configManagerRef.current}
+        appMode={appMode}
+        onToggleAppMode={handleToggleAppMode}
+        aiStudioApiKey={aiStudioApiKey}
+        onSaveAiStudioApiKey={handleSaveAiStudioApiKey}
+        aiStudioModel={aiStudioModel}
+        onSaveAiStudioModel={handleSaveAiStudioModel}
       />
     </main>
   );

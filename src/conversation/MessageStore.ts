@@ -60,20 +60,57 @@ export class MessageStore {
   }
 
   public updateMessage(agentId: string, messageId: string, updater: (prev: Message) => Message): void {
-    const list = this.messagesByAgent.get(agentId) || [];
-    const index = list.findIndex((m) => m.id === messageId);
+    let targetAgent = agentId;
+    let list = this.messagesByAgent.get(targetAgent) || [];
+    let index = list.findIndex(
+      (m) => m.id === messageId || m.id === `resp-${messageId}` || m.id.replace(/^resp-/, '') === messageId
+    );
+
+    // If not found in requested agent, search other agent lists (e.g. kairos vs bot_01)
+    if (index === -1) {
+      for (const [otherAgent, otherList] of this.messagesByAgent.entries()) {
+        const otherIndex = otherList.findIndex(
+          (m) => m.id === messageId || m.id === `resp-${messageId}` || m.id.replace(/^resp-/, '') === messageId
+        );
+        if (otherIndex !== -1) {
+          targetAgent = otherAgent;
+          list = otherList;
+          index = otherIndex;
+          break;
+        }
+      }
+    }
+
     if (index !== -1) {
       const updated = updater(list[index]);
       const newList = [...list];
       newList[index] = updated;
-      this.messagesByAgent.set(agentId, newList);
+      this.messagesByAgent.set(targetAgent, newList);
       this.notify();
     }
   }
 
   public appendDelta(agentId: string, messageId: string, deltaText: string): void {
-    const list = this.messagesByAgent.get(agentId) || [];
-    const index = list.findIndex((m) => m.id === messageId);
+    let targetAgent = agentId;
+    let list = this.messagesByAgent.get(targetAgent) || [];
+    let index = list.findIndex(
+      (m) => m.id === messageId || m.id === `resp-${messageId}` || m.id.replace(/^resp-/, '') === messageId
+    );
+
+    if (index === -1) {
+      for (const [otherAgent, otherList] of this.messagesByAgent.entries()) {
+        const otherIndex = otherList.findIndex(
+          (m) => m.id === messageId || m.id === `resp-${messageId}` || m.id.replace(/^resp-/, '') === messageId
+        );
+        if (otherIndex !== -1) {
+          targetAgent = otherAgent;
+          list = otherList;
+          index = otherIndex;
+          break;
+        }
+      }
+    }
+
     if (index !== -1) {
       const current = list[index];
       const updated: Message = {
@@ -83,7 +120,7 @@ export class MessageStore {
       };
       const newList = [...list];
       newList[index] = updated;
-      this.messagesByAgent.set(agentId, newList);
+      this.messagesByAgent.set(targetAgent, newList);
       this.notify();
     }
   }

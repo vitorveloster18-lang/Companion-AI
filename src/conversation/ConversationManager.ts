@@ -17,6 +17,7 @@ export class ConversationManager {
 
   // Map of active streaming message ID to agentId
   private activeStreams: Map<string, string> = new Map();
+  private onSpeechStateChange?: (isSpeaking: boolean, textChunk?: string) => void;
 
   constructor(connection: AgentConnection, messageStore: MessageStore) {
     this.connection = connection;
@@ -28,6 +29,10 @@ export class ConversationManager {
     });
   }
 
+  public setOnSpeechStateChange(cb: (isSpeaking: boolean, textChunk?: string) => void): void {
+    this.onSpeechStateChange = cb;
+  }
+
   public getStore(): MessageStore {
     return this.messageStore;
   }
@@ -36,9 +41,12 @@ export class ConversationManager {
     if (!data || typeof data !== 'object') return;
 
     const msg = data as Partial<ChatInboundMessage>;
-    if (!msg.type || !msg.type.startsWith('chat.') || !msg.id) return;
+    if (!msg.type || !msg.type.startsWith('chat.')) return;
 
-    const msgId = msg.id;
+    // Use msg.id or the first active stream ID if omitted
+    const msgId = msg.id || (this.activeStreams.keys().next().value as string | undefined);
+    if (!msgId) return;
+
     const activeAgentId = this.activeStreams.get(msgId) || this.messageStore.getActiveAgentId();
 
     switch (msg.type) {
@@ -51,6 +59,9 @@ export class ConversationManager {
           ...prev,
           status: 'streaming',
         }));
+
+        // Trigger avatar speech & talk animation
+        this.onSpeechStateChange?.(true);
         break;
       }
 
@@ -60,7 +71,9 @@ export class ConversationManager {
 
         // Ensure response message placeholder exists
         const messages = this.messageStore.getMessages(agentId);
-        const exists = messages.some((m) => m.id === `resp-${msgId}`);
+        const exists = messages.some(
+          (m) => m.id === `resp-${msgId}` || m.id === msgId || m.id.replace(/^resp-/, '') === msgId
+        );
 
         if (!exists) {
           this.messageStore.addMessage(agentId, {
@@ -75,6 +88,9 @@ export class ConversationManager {
         } else {
           this.messageStore.appendDelta(agentId, `resp-${msgId}`, deltaText);
         }
+
+        // Animate lipsync flutter
+        this.onSpeechStateChange?.(true, deltaText);
         break;
       }
 
@@ -85,6 +101,9 @@ export class ConversationManager {
           status: 'completed',
         }));
         this.activeStreams.delete(msgId);
+
+        // Stop avatar speech
+        this.onSpeechStateChange?.(false);
         break;
       }
 
@@ -98,6 +117,9 @@ export class ConversationManager {
           content: prev.content ? `${prev.content}\n\n[Erro: ${errorMsg}]` : `[Erro: ${errorMsg}]`,
         }));
         this.activeStreams.delete(msgId);
+
+        // Stop avatar speech
+        this.onSpeechStateChange?.(false);
         break;
       }
     }

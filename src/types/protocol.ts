@@ -107,9 +107,11 @@ export interface CDIBiometricsData {
   mode?: 'awake' | 'sleep' | 'dream' | string;
   phase?: 'AWAKE' | 'REM' | 'DEEP_SLEEP' | 'MEDITATION' | string;
   affect?: string;
+  affect_label?: string;
   valence: number;
   arousal: number;
   top_drives: DriveItem[];
+  drives?: Record<string, number>;
   last_decision?: string;
   stagnation?: number;
   cse_units?: number;

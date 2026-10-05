@@ -1,8 +1,8 @@
 /**
- * MultiAvatarSceneGroup: Renders and animates the 4 CDIs (Kairós, Naia, Salem, Nova)
- * in the same 3D space for Group View.
+ * MultiAvatarSceneGroup: Dynamically renders and animates secondary peer avatars in 3D
+ * space for Group View based strictly on the user's created bots.
  * Displays distinctive stylized humanoid avatars, signature neon color auras,
- * individualized animations (awake/talking, sleeping, dreaming), and peer-to-peer data beam arcs.
+ * individualized animations, dynamic 3D name badges, and peer-to-peer data beam arcs.
  */
 
 import * as THREE from 'three';
@@ -12,8 +12,10 @@ export class MultiAvatarSceneGroup {
   private parentScene: THREE.Scene;
   private group: THREE.Group;
   private isGroupMode: boolean = false;
+  private currentCDIs: CDIListItem[] = [];
+  private activeMainId: string = '';
 
-  // Individual Peer Avatar 3D sub-groups (for Naia, Salem, Nova)
+  // Dynamic Peer Avatar 3D sub-groups
   private peerRigs: Map<
     string,
     {
@@ -21,6 +23,7 @@ export class MultiAvatarSceneGroup {
       head: THREE.Mesh;
       body: THREE.Mesh;
       auraRing: THREE.Mesh;
+      nameSprite?: THREE.Sprite;
       particles?: THREE.Points;
       basePos: THREE.Vector3;
       status: string;
@@ -35,10 +38,10 @@ export class MultiAvatarSceneGroup {
   constructor(scene: THREE.Scene) {
     this.parentScene = scene;
     this.group = new THREE.Group();
+    this.group.name = 'MultiAvatarGroup';
     this.group.visible = false;
     this.parentScene.add(this.group);
 
-    this.initPeerRigs();
     this.initDataBeam();
   }
 
@@ -47,15 +50,94 @@ export class MultiAvatarSceneGroup {
     this.group.visible = visible;
   }
 
-  private initPeerRigs(): void {
-    // 1. Naia (Left: -1.6, 0, -0.4) — Emerald Green (#10b981) — SLEEPING
-    this.createPeerRig('naia', 'Naia', new THREE.Vector3(-1.7, 0, -0.5), 0x10b981, 'sleeping');
+  /**
+   * Synchronizes the 3D peer avatars with the actual bots created in the interface
+   */
+  public syncCDIs(cdis: CDIListItem[], activeId: string): void {
+    this.currentCDIs = cdis;
+    this.activeMainId = activeId;
 
-    // 2. Salem (Right: 1.6, 0, -0.4) — Amber Gold (#f59e0b) — AWAKE / ENGAGED
-    this.createPeerRig('salem', 'Salem', new THREE.Vector3(1.7, 0, -0.5), 0xf59e0b, 'awake');
+    // Filter out the primary active bot which is already rendered by AvatarController in the center
+    const peerBots = cdis.filter((c) => c.id !== activeId);
 
-    // 3. Nova (Background Center: 0, 0, -1.8) — Cosmic Indigo (#6366f1) — DREAMING
-    this.createPeerRig('nova', 'Nova', new THREE.Vector3(0, 0, -1.9), 0x6366f1, 'dreaming');
+    // Identify which existing rigs should be kept vs removed
+    const incomingIds = new Set(peerBots.map((b) => b.id));
+
+    // Remove obsolete rigs
+    for (const [id, rig] of this.peerRigs.entries()) {
+      if (!incomingIds.has(id)) {
+        this.group.remove(rig.group);
+        rig.group.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
+        this.peerRigs.delete(id);
+      }
+    }
+
+    // Positions in a smooth arc around the studio (radius ~2.2m)
+    const count = peerBots.length;
+    peerBots.forEach((bot, index) => {
+      // Calculate arc position: distribute evenly between -60 deg and +60 deg
+      let angle = 0;
+      if (count === 1) {
+        angle = Math.PI / 4; // 45 deg right
+      } else {
+        const span = Math.PI * 0.7; // ~126 deg total arc
+        const step = span / (count - 1 || 1);
+        angle = -span / 2 + index * step;
+      }
+
+      const radius = 2.1;
+      const posX = Math.sin(angle) * radius;
+      const posZ = -Math.cos(angle) * radius + 0.8;
+      const targetPos = new THREE.Vector3(posX, 0, posZ);
+
+      const colorHex = parseInt(bot.avatar_color?.replace('#', '') || '06b6d4', 16);
+
+      if (this.peerRigs.has(bot.id)) {
+        // Update existing rig position & status
+        const rig = this.peerRigs.get(bot.id)!;
+        rig.group.position.copy(targetPos);
+        rig.basePos.copy(targetPos);
+        rig.status = bot.status;
+      } else {
+        // Create new rig
+        this.createPeerRig(bot.id, bot.name, targetPos, colorHex, bot.status);
+      }
+    });
+  }
+
+  private createNameSprite(name: string, colorHex: number): THREE.Sprite {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = 'rgba(3, 7, 18, 0.85)';
+      ctx.strokeStyle = `#${colorHex.toString(16).padStart(6, '0')}`;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(8, 8, 240, 48, 12);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = 'bold 22px monospace';
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(name.toUpperCase(), 128, 32);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(0.8, 0.2, 1);
+    sprite.position.set(0, 1.75, 0);
+    return sprite;
   }
 
   private createPeerRig(
@@ -72,12 +154,12 @@ export class MultiAvatarSceneGroup {
     peerGroup.lookAt(0, 1.0, 1.2);
 
     // Floor Aura Ring
-    const ringGeo = new THREE.RingGeometry(0.5, 0.55, 32);
+    const ringGeo = new THREE.RingGeometry(0.45, 0.52, 32);
     const ringMat = new THREE.MeshBasicMaterial({
       color: colorHex,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.65,
     });
     const auraRing = new THREE.Mesh(ringGeo, ringMat);
     auraRing.rotation.x = -Math.PI / 2;
@@ -87,10 +169,10 @@ export class MultiAvatarSceneGroup {
     // Humanoid Body/Torso
     const bodyMat = new THREE.MeshStandardMaterial({
       color: 0x1e293b,
-      roughness: 0.5,
-      metalness: 0.6,
+      roughness: 0.4,
+      metalness: 0.5,
     });
-    const bodyGeo = new THREE.CylinderGeometry(0.18, 0.12, 0.75, 16);
+    const bodyGeo = new THREE.CylinderGeometry(0.16, 0.12, 0.72, 16);
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     body.position.y = 0.85;
     body.castShadow = true;
@@ -109,50 +191,31 @@ export class MultiAvatarSceneGroup {
 
     // Humanoid Head
     const headMat = new THREE.MeshStandardMaterial({
-      color: 0xffdfd3,
-      roughness: 0.7,
+      color: 0x334155,
+      roughness: 0.5,
+      metalness: 0.2,
     });
-    const headGeo = new THREE.SphereGeometry(0.14, 20, 20);
+    const headGeo = new THREE.SphereGeometry(0.13, 20, 20);
     const head = new THREE.Mesh(headGeo, headMat);
-    head.position.y = 1.38;
+    head.position.y = 1.36;
     head.castShadow = true;
     peerGroup.add(head);
 
     // Hair / Cyber Visor
-    const visorGeo = new THREE.BoxGeometry(0.22, 0.06, 0.14);
+    const visorGeo = new THREE.BoxGeometry(0.2, 0.06, 0.12);
     const visorMat = new THREE.MeshStandardMaterial({
       color: colorHex,
       emissive: colorHex,
-      emissiveIntensity: 0.6,
+      emissiveIntensity: 0.7,
       roughness: 0.2,
     });
     const visor = new THREE.Mesh(visorGeo, visorMat);
-    visor.position.set(0, 1.4, 0.08);
+    visor.position.set(0, 1.38, 0.08);
     peerGroup.add(visor);
 
-    // Specific Props / Particles per Peer
-    let particles: THREE.Points | undefined;
-    if (status === 'dreaming' || id === 'nova') {
-      // Nova Dream Dust Particles
-      const count = 40;
-      const geo = new THREE.BufferGeometry();
-      const posArray = new Float32Array(count * 3);
-      for (let i = 0; i < count; i++) {
-        posArray[i * 3] = (Math.random() - 0.5) * 0.8;
-        posArray[i * 3 + 1] = 1.2 + (Math.random() - 0.5) * 0.6;
-        posArray[i * 3 + 2] = (Math.random() - 0.5) * 0.8;
-      }
-      geo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-      const mat = new THREE.PointsMaterial({
-        color: 0xa5b4fc,
-        size: 0.035,
-        transparent: true,
-        opacity: 0.75,
-        blending: THREE.AdditiveBlending,
-      });
-      particles = new THREE.Points(geo, mat);
-      peerGroup.add(particles);
-    }
+    // Floating Name Sprite
+    const nameSprite = this.createNameSprite(name, colorHex);
+    peerGroup.add(nameSprite);
 
     this.group.add(peerGroup);
     this.peerRigs.set(id, {
@@ -160,7 +223,7 @@ export class MultiAvatarSceneGroup {
       head,
       body,
       auraRing,
-      particles,
+      nameSprite,
       basePos: pos.clone(),
       status,
       color: colorHex,
@@ -207,8 +270,8 @@ export class MultiAvatarSceneGroup {
   }
 
   private getAgentWorldPos(id: string): THREE.Vector3 {
-    if (id === 'kairos') {
-      return new THREE.Vector3(0, 1.2, 0.4);
+    if (id === this.activeMainId) {
+      return new THREE.Vector3(0, 1.2, 0);
     }
     const peer = this.peerRigs.get(id);
     if (peer) {
@@ -232,30 +295,21 @@ export class MultiAvatarSceneGroup {
       rig.auraRing.scale.set(auraScale, auraScale, 1);
 
       // 2. Posture & Breathing animation
-      if (rig.status === 'sleeping' || id === 'naia') {
-        // Slow gentle sleeping breath
+      if (rig.status === 'sleeping') {
         const breath = Math.sin(time * 1.2) * 0.02;
         rig.body.position.y = 0.85 + breath;
-        rig.head.position.y = 1.38 + breath;
-        rig.head.rotation.z = 0.15; // Tilted sleeping head
-        rig.head.rotation.x = 0.1;
-      } else if (rig.status === 'dreaming' || id === 'nova') {
-        // Floating slightly in dream state
-        const floatY = Math.sin(time * 1.5) * 0.04;
+        rig.head.position.y = 1.36 + breath;
+        rig.head.rotation.z = 0.12;
+      } else if (rig.status === 'dreaming') {
+        const floatY = Math.sin(time * 1.5) * 0.035;
         rig.group.position.y = rig.basePos.y + floatY;
-        rig.head.rotation.y = Math.sin(time * 0.8) * 0.15;
-
-        // Animate dream particles
-        if (rig.particles) {
-          rig.particles.rotation.y += delta * 0.3;
-        }
+        rig.head.rotation.y = Math.sin(time * 0.8) * 0.12;
       } else {
-        // Awake / engaged (Salem) — subtle conversation gestures
-        const bob = Math.sin(time * 2.5) * 0.015;
+        // Awake / active
+        const bob = Math.sin(time * 2.2) * 0.012;
         rig.body.position.y = 0.85 + bob;
-        rig.head.position.y = 1.38 + bob;
-        rig.head.rotation.y = Math.sin(time * 1.1) * 0.12;
-        rig.head.rotation.x = Math.sin(time * 1.8) * 0.05;
+        rig.head.position.y = 1.36 + bob;
+        rig.head.rotation.y = Math.sin(time * 1.1) * 0.1;
       }
     }
 

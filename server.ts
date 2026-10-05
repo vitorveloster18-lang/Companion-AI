@@ -166,6 +166,7 @@ interface SocketClient {
 }
 
 const activeSockets = new Map<WebSocket, SocketClient>();
+const processedMessageIds = new Map<string, number>();
 
 function isBotOnline(botId: string): boolean {
   for (const client of activeSockets.values()) {
@@ -247,6 +248,41 @@ app.post('/api/bots', (req, res) => {
     is_online: false,
   });
 });
+
+const handleUpdateBot = (req: express.Request, res: express.Response) => {
+  const { id } = req.params;
+  const { name, role, username } = req.body || {};
+  const bot = activeBots.find((b) => b.id === id);
+  if (!bot) {
+    res.status(404).json({ error: 'Bot não encontrado.' });
+    return;
+  }
+
+  if (name && typeof name === 'string' && name.trim()) {
+    bot.name = name.trim();
+  }
+  if (role !== undefined && typeof role === 'string') {
+    bot.role = role.trim();
+  }
+  if (username && typeof username === 'string' && username.trim()) {
+    bot.username = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+  }
+
+  saveBots(activeBots);
+
+  broadcastToUI({
+    type: 'bot.list',
+    bots: getBotsResponse(),
+  });
+
+  res.json({
+    ...bot,
+    is_online: isBotOnline(bot.id),
+  });
+};
+
+app.patch('/api/bots/:id', handleUpdateBot);
+app.put('/api/bots/:id', handleUpdateBot);
 
 app.delete('/api/bots/:id', (req, res) => {
   const { id } = req.params;
@@ -581,6 +617,114 @@ Valores permitidos para reaction_animation: "nod", "wave", "cheer", "talk", "idl
   }
 });
 
+// AI Studio Direct Chat Endpoint (Mode AI Studio Test)
+app.post('/api/ai-studio/chat', async (req, res) => {
+  try {
+    const { message, history, apiKey, model } = req.body || {};
+    if (!message || typeof message !== 'string') {
+      res.status(400).json({ error: 'Campo message é obrigatório.' });
+      return;
+    }
+
+    // In AI Studio development, GoogleGenAI uses native environment credentials automatically when no custom key is provided
+    const keyToUse = apiKey || process.env.GEMINI_API_KEY;
+    const ai = new GoogleGenAI(keyToUse ? { apiKey: keyToUse } : {});
+
+    // Primary and fallback candidate models
+    const requestedModel = (model || 'gemini-3.5-flash-lite').trim();
+    const candidateModels = [
+      requestedModel === 'gemini-3.5-flash-lite' ? 'gemini-3.1-flash-lite' : requestedModel,
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+    ];
+
+    // Deduplicate candidate models
+    const uniqueCandidates = Array.from(new Set(candidateModels));
+
+    // Build chat contents from history
+    const contents: any[] = [];
+    if (Array.isArray(history)) {
+      for (const h of history.slice(-8)) {
+        if (h.role === 'user' && h.content) {
+          contents.push({ role: 'user', parts: [{ text: h.content }] });
+        } else if (h.role === 'agent' && h.content) {
+          contents.push({ role: 'model', parts: [{ text: h.content }] });
+        }
+      }
+    }
+    contents.push({ role: 'user', parts: [{ text: message }] });
+
+    const systemInstruction = `Sou um CDI de teste. Respondo de forma curta e natural.
+Incluo no meu JSON de resposta o estado emocional:
+{
+  "text": "resposta aqui",
+  "affect": "happy",
+  "animation": "nod"
+}
+
+Opções para affect: "wondering", "happy", "calm", "grieving", "tense", "longing", "playful".
+Opções para animation: "nod", "thinking", "cheer", "wave", "talk", "idle".`;
+
+    let response: any = null;
+    let successfulModel = requestedModel;
+
+    // Try candidate models with graceful fallback
+    for (const mod of uniqueCandidates) {
+      try {
+        response = await ai.models.generateContent({
+          model: mod,
+          contents,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+          },
+        });
+        if (response) {
+          successfulModel = mod;
+          break;
+        }
+      } catch (genErr: any) {
+        console.warn(`[AI Studio Chat] Tentativa com modelo "${mod}" falhou (${genErr?.message}). Tentando próximo...`);
+      }
+    }
+
+    if (!response) {
+      throw new Error('Não foi possível gerar resposta com os modelos disponíveis.');
+    }
+
+    const rawOutput = (response.text || '').trim();
+    let parsedJson: { text?: string; affect?: string; animation?: string } = {};
+
+    try {
+      parsedJson = JSON.parse(rawOutput);
+    } catch {
+      const cleaned = rawOutput.replace(/```json/g, '').replace(/```/g, '').trim();
+      try {
+        parsedJson = JSON.parse(cleaned);
+      } catch {
+        parsedJson = { text: rawOutput, affect: 'happy', animation: 'talk' };
+      }
+    }
+
+    const replyText = parsedJson.text || 'Entendido. Processando estímulo.';
+    const replyAffect = parsedJson.affect || 'happy';
+    const replyAnimation = parsedJson.animation || 'talk';
+
+    res.json({
+      success: true,
+      text: replyText,
+      affect: replyAffect,
+      animation: replyAnimation,
+      model: successfulModel,
+      nativeStudioAuth: !apiKey,
+    });
+  } catch (err: any) {
+    console.error('[AI Studio Chat] Erro ao gerar resposta:', err);
+    res.status(500).json({ error: err?.message || 'Falha ao gerar resposta com o Gemini.' });
+  }
+});
+
 // Set up HTTP Server
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 50 * 1024 * 1024 });
@@ -704,22 +848,102 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage, meta?: any) 
       if (sender.type === 'ui') {
         const targetBotId = parsed.agent_id;
 
-        let sent = false;
-        for (const [targetWs, targetClient] of activeSockets.entries()) {
-          if (targetClient.type === 'runtime' && targetWs.readyState === WebSocket.OPEN) {
-            if (!targetClient.botId || !targetBotId || targetClient.botId === targetBotId) {
-              targetWs.send(raw);
-              sent = true;
+        // 1. Detailed log when UI sends chat.message
+        if (parsed.type === 'chat.message') {
+          const onlineRuntimes = Array.from(activeSockets.values())
+            .filter((c) => c.type === 'runtime' && c.ws.readyState === WebSocket.OPEN);
+
+          console.log(`\n======================================================`);
+          console.log(`[Gateway] 📨 [CHAT.MESSAGE] Recebido da UI:`);
+          console.log(`  - Message ID: "${parsed.id}"`);
+          console.log(`  - Target agent_id: "${parsed.agent_id}"`);
+          console.log(`  - Texto: "${parsed.text}"`);
+          console.log(`  - Runtimes Python Ativos (${onlineRuntimes.length}): ${onlineRuntimes.map((c) => `botId="${c.botId || 'none'}", id="${c.id}"`).join(' | ') || 'NENHUM'}`);
+          console.log(`======================================================\n`);
+        }
+
+        // 2. Deduplication check: Confirm only ONE instance processes each message
+        if (parsed.id) {
+          const now = Date.now();
+          const prevTime = processedMessageIds.get(parsed.id);
+          if (prevTime && now - prevTime < 30000) {
+            console.warn(`[Gateway] ⚠️ Mensagem duplicada ignorada (id="${parsed.id}" recebida há ${now - prevTime}ms)`);
+            return;
+          }
+          processedMessageIds.set(parsed.id, now);
+
+          // Purge old IDs if cache exceeds 500
+          if (processedMessageIds.size > 500) {
+            const cutoff = now - 30000;
+            for (const [mid, time] of processedMessageIds.entries()) {
+              if (time < cutoff) processedMessageIds.delete(mid);
             }
           }
         }
 
-        if (!sent) {
-          console.log(`[Gateway] Mensagem recebida para ${targetBotId || 'agente'}, aguardando conexão do runtime desse bot...`);
+        // 3. Find candidate runtimes
+        const candidateRuntimes = Array.from(activeSockets.entries())
+          .filter(([targetWs, targetClient]) => targetClient.type === 'runtime' && targetWs.readyState === WebSocket.OPEN);
+
+        // Find best match:
+        // a) Exact botId match
+        // b) Alias match: 'kairos' or 'bot_01'
+        // c) If only 1 runtime is connected, route to it
+        let selectedCandidate = candidateRuntimes.find(
+          ([_, c]) => c.botId && targetBotId && c.botId === targetBotId
+        );
+
+        if (!selectedCandidate && targetBotId) {
+          // Check alias
+          if (targetBotId === 'kairos' || targetBotId === 'bot_01') {
+            selectedCandidate = candidateRuntimes.find(
+              ([_, c]) => c.botId === 'bot_01' || c.botId === 'kairos'
+            );
+          }
+        }
+
+        if (!selectedCandidate && candidateRuntimes.length === 1) {
+          selectedCandidate = candidateRuntimes[0];
+        } else if (!selectedCandidate && candidateRuntimes.length > 1) {
+          // If no specific match, pick the most recently connected runtime
+          selectedCandidate = candidateRuntimes.sort((a, b) => b[1].connectedAt - a[1].connectedAt)[0];
+        }
+
+        // Send to EXACTLY ONE runtime instance
+        if (selectedCandidate) {
+          const [targetWs, targetClient] = selectedCandidate;
+
+          // Normalize agent_id so Python avatar_handler receives the exact botId it expects (e.g. 'bot_01')
+          const originalAgentId = parsed.agent_id;
+          if (targetClient.botId) {
+            parsed.agent_id = targetClient.botId;
+          } else if (!parsed.agent_id) {
+            parsed.agent_id = 'bot_01';
+          }
+
+          const payload = JSON.stringify(parsed);
+          targetWs.send(payload);
+
+          if (parsed.type === 'chat.message') {
+            console.log(
+              `[Gateway] ✅ [CHAT.MESSAGE] Encaminhado para o runtime Python: botId="${targetClient.botId}", socketId="${targetClient.id}", agent_id_enviado="${parsed.agent_id}" (original: "${originalAgentId}")`
+            );
+          }
+        } else {
+          console.warn(
+            `[Gateway] ⚠️ Mensagem recebida para "${targetBotId || 'agente'}", mas nenhum runtime correspondente está conectado no momento.`
+          );
         }
       } else {
+        // Message from Python Runtime -> UI
         if (sender.botId && !parsed.agent_id) {
           parsed.agent_id = sender.botId;
+        }
+
+        if (parsed.type === 'chat.started' || parsed.type === 'chat.completed') {
+          console.log(`[Gateway] 🤖 [${parsed.type.toUpperCase()}] Recebido do Runtime (botId="${sender.botId}"): id="${parsed.id}"`);
+        } else if (parsed.type === 'action') {
+          console.log(`[Gateway] 🎬 [ACTION] Recebido do Runtime (botId="${sender.botId}"): action="${parsed.action}", anim="${parsed.animation || ''}", expr="${parsed.expression || ''}"`);
         }
 
         const enrichedRaw = JSON.stringify(parsed);

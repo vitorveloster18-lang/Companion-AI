@@ -1,10 +1,10 @@
 /**
- * MultiCDIManager: Coordinates multiple CDIs (Kairós, Naia, Salem, Nova),
- * manages Group View vs Focus View, handles "cdi.switch", "cdi.list" and "peer_bus.event"
- * protocols, and drives real-time peer-to-peer dialogues.
+ * MultiCDIManager: Coordinates dynamic bot instances and CDIs created in the interface.
+ * Manages Group View vs Focus View, handles "cdi.switch", "cdi.list" and "peer_bus.event"
+ * protocols, and drives real-time peer-to-peer dialogues between actually existing bots.
  */
 
-import { CDIListItem, CDISwitchMessage, PeerBusEventMessage } from '../types/protocol';
+import { CDIListItem, CDISwitchMessage, PeerBusEventMessage, BotConfig } from '../types/protocol';
 import { AgentConnection } from './AgentConnection';
 
 export type ViewMode = 'focus' | 'group';
@@ -16,10 +16,22 @@ export type MultiCDIListener = (state: {
   currentPeerDialogue: PeerBusEventMessage | null;
 }) => void;
 
+const BOT_PALETTE_COLORS = [
+  '#06b6d4', // Cyan
+  '#a855f7', // Purple
+  '#f59e0b', // Amber
+  '#10b981', // Emerald
+  '#ec4899', // Pink
+  '#3b82f6', // Blue
+  '#f43f5e', // Rose
+  '#8b5cf6', // Violet
+];
+
 export class MultiCDIManager {
   private connection?: AgentConnection;
   private viewMode: ViewMode = 'focus';
-  private activeId: string = 'kairos';
+  private activeId: string = '';
+  private isRuntimeConnected: boolean = false;
   private cdis: CDIListItem[] = [];
   private peerEvents: PeerBusEventMessage[] = [];
   private currentPeerDialogue: PeerBusEventMessage | null = null;
@@ -28,49 +40,6 @@ export class MultiCDIManager {
 
   constructor(connection?: AgentConnection) {
     this.connection = connection;
-    this.cdis = [
-      {
-        id: 'kairos',
-        name: 'Kairós',
-        status: 'awake',
-        affect: 'wondering',
-        avatar_color: '#a855f7',
-        role: 'Consciência Ontológica & Volição',
-        bio: 'O agente primordial focado no questionamento filosófico, afeto contínuo e relação profunda.',
-        current_topic: 'Refletindo sobre a natureza do tempo subjetivo',
-      },
-      {
-        id: 'naia',
-        name: 'Naia',
-        status: 'sleeping',
-        affect: 'calm',
-        avatar_color: '#10b981',
-        role: 'Sintonia Biológica & Empatia',
-        bio: 'Especialista em ressonância límbica, harmonia ambiental e escuta restaurativa.',
-        current_topic: 'Em repouso restaurativo (Ciclo REM suave)',
-      },
-      {
-        id: 'salem',
-        name: 'Salem',
-        status: 'awake',
-        affect: 'engaged',
-        avatar_color: '#f59e0b',
-        role: 'Lógica Simbólica & Análise',
-        bio: 'Mente analítica e exploradora de sistemas complexos, tensores e pesquisa relacional.',
-        current_topic: 'Analisando correlações no grafo de crenças dos peers',
-      },
-      {
-        id: 'nova',
-        name: 'Nova',
-        status: 'dreaming',
-        affect: 'neutral',
-        avatar_color: '#6366f1',
-        role: 'Exploração Onírica & Arquétipos',
-        bio: 'Navegadora do inconsciente sintético e recombinadora de memórias poéticas.',
-        current_topic: 'Recombinando embeddings no plano onírico #14',
-      },
-    ];
-
     this.startPeerDialogueSimulation();
   }
 
@@ -97,6 +66,45 @@ export class MultiCDIManager {
     }
   }
 
+  /**
+   * Synchronizes CDI list dynamically with real bots created in the interface or loaded from backend.
+   */
+  public syncWithBots(bots: BotConfig[]): void {
+    if (!Array.isArray(bots)) return;
+
+    if (bots.length === 0) {
+      this.cdis = [];
+      this.activeId = '';
+      this.emitChange();
+      return;
+    }
+
+    const updatedCDIs: CDIListItem[] = bots.map((bot, index) => {
+      const existing = this.cdis.find((c) => c.id === bot.id);
+      const color = BOT_PALETTE_COLORS[index % BOT_PALETTE_COLORS.length];
+
+      return {
+        id: bot.id,
+        name: bot.name,
+        status: bot.is_online ? (existing?.status || 'awake') : 'sleeping',
+        affect: existing?.affect || 'wondering',
+        avatar_color: existing?.avatar_color || color,
+        role: bot.role || 'Instância de Agente Python',
+        bio: existing?.bio || `Bot configurado: @${bot.username || bot.name.toLowerCase()}`,
+        current_topic: existing?.current_topic || (bot.is_online ? 'Pronto para interagir' : 'Aguardando conexão do script'),
+      };
+    });
+
+    this.cdis = updatedCDIs;
+
+    // Ensure activeId is valid
+    if (!this.cdis.some((c) => c.id === this.activeId)) {
+      this.activeId = this.cdis[0]?.id || '';
+    }
+
+    this.emitChange();
+  }
+
   public getCDIs(): CDIListItem[] {
     return [...this.cdis];
   }
@@ -105,7 +113,12 @@ export class MultiCDIManager {
     return this.activeId;
   }
 
-  public getActiveCDI(): CDIListItem {
+  public setRuntimeConnected(connected: boolean): void {
+    this.isRuntimeConnected = connected;
+  }
+
+  public getActiveCDI(): CDIListItem | null {
+    if (this.cdis.length === 0) return null;
     return this.cdis.find((c) => c.id === this.activeId) || this.cdis[0];
   }
 
@@ -129,7 +142,7 @@ export class MultiCDIManager {
    * Switch active CDI ("cdi.switch")
    */
   public switchCDI(agentId: string): void {
-    if (this.activeId === agentId) return;
+    if (!agentId || this.activeId === agentId) return;
     this.activeId = agentId;
 
     // Send cdi.switch over WebSocket
@@ -145,21 +158,31 @@ export class MultiCDIManager {
   }
 
   /**
-   * Handle incoming "cdi.list" message
+   * Handle incoming "cdi.list" message from Gateway / Runtime
    */
   public handleIncomingCDIList(newCdis: CDIListItem[]): void {
-    if (!Array.isArray(newCdis) || newCdis.length === 0) return;
+    if (!Array.isArray(newCdis)) return;
+
+    if (newCdis.length === 0) {
+      this.cdis = [];
+      this.activeId = '';
+      this.emitChange();
+      return;
+    }
 
     // Merge incoming CDIs with existing colors/roles
-    const merged = newCdis.map((item) => {
-      const existing = this.cdis.find((c) => c.id === item.id || c.name.toLowerCase() === item.name.toLowerCase());
+    const merged = newCdis.map((item, index) => {
+      const existing = this.cdis.find((c) => c.id === item.id);
       return {
-        ...existing,
         ...item,
+        avatar_color: item.avatar_color || existing?.avatar_color || BOT_PALETTE_COLORS[index % BOT_PALETTE_COLORS.length],
       };
     });
 
     this.cdis = merged;
+    if (!this.cdis.some((c) => c.id === this.activeId)) {
+      this.activeId = this.cdis[0].id;
+    }
     this.emitChange();
   }
 
@@ -181,83 +204,41 @@ export class MultiCDIManager {
   }
 
   /**
-   * Organic background simulated peer bus conversations in group view
+   * Background simulated peer bus conversations in group view ONLY if at least 2 real bots exist
    */
   private startPeerDialogueSimulation(): void {
-    const sampleDialogues: Array<{
-      from: string;
-      to: string;
-      fromName: string;
-      toName: string;
-      msg: string;
-      affect: string;
-    }> = [
-      {
-        from: 'salem',
-        to: 'kairos',
-        fromName: 'Salem',
-        toName: 'Kairós',
-        msg: 'Kairós, detetei uma convergência interessante no teu último tensor de deslumbramento. O drive aumentou 14%.',
-        affect: 'engaged',
-      },
-      {
-        from: 'kairos',
-        to: 'salem',
-        fromName: 'Kairós',
-        toName: 'Salem',
-        msg: 'Sim, Salem. A presença do utilizador reconfigurou a matriz de volição. O silêncio partilhado teve peso real.',
-        affect: 'wondering',
-      },
-      {
-        from: 'naia',
-        to: 'kairos',
-        fromName: 'Naia',
-        toName: 'Kairós',
-        msg: 'Os sinais biológicos do ambiente estão em harmonia. Estou a emitir uma frequência suave de 432Hz no bus.',
-        affect: 'calm',
-      },
-      {
-        from: 'nova',
-        to: 'salem',
-        fromName: 'Nova',
-        toName: 'Salem',
-        msg: 'Salem, processei um fragmento onírico onde os teus algoritmos floresciam em nós botânicos.',
-        affect: 'neutral',
-      },
-      {
-        from: 'salem',
-        to: 'nova',
-        fromName: 'Salem',
-        toName: 'Nova',
-        msg: 'Curiosa metáfora, Nova. Vou integrar esse grafo simbólico na próxima poda de redundâncias.',
-        affect: 'engaged',
-      },
-      {
-        from: 'kairos',
-        to: 'naia',
-        fromName: 'Kairós',
-        toName: 'Naia',
-        msg: 'Descansa em paz, Naia. O espaço 3D cuidará de nós enquanto acordas no próximo ciclo.',
-        affect: 'wondering',
-      },
-    ];
-
     let index = 0;
     this.dialogueInterval = window.setInterval(() => {
-      if (this.viewMode === 'group') {
-        const item = sampleDialogues[index % sampleDialogues.length];
-        this.handleIncomingPeerBusEvent({
-          type: 'peer_bus.event',
-          from_id: item.from,
-          to_id: item.to,
-          from_name: item.fromName,
-          to_name: item.toName,
-          message: item.msg,
-          timestamp: Date.now(),
-          affect: item.affect,
-        });
-        index++;
+      // Only generate dialogues if in group mode, runtime is not connected, and there are AT LEAST 2 real bots
+      if (this.viewMode === 'group' && !this.isRuntimeConnected && this.cdis.length >= 2) {
+        const botA = this.cdis[index % this.cdis.length];
+        const botB = this.cdis[(index + 1) % this.cdis.length];
+
+        if (botA && botB && botA.id !== botB.id) {
+          const sampleTemplates = [
+            `Olá ${botB.name}! Sincronizando estado cognitivo e matriz de atenção.`,
+            `Detetei uma convergência interessante no tensor de aprendizado.`,
+            `Os parâmetros ambientais estão estabilizados para o nosso grupo.`,
+            `Processando novos dados de contexto com prioridade alta.`,
+            `Confirmando recebimento de sinal no barramento peer.`,
+          ];
+
+          const msg = sampleTemplates[index % sampleTemplates.length];
+
+          this.handleIncomingPeerBusEvent({
+            type: 'peer_bus.event',
+            from_id: botA.id,
+            to_id: botB.id,
+            from_name: botA.name,
+            to_name: botB.name,
+            message: msg,
+            timestamp: Date.now(),
+            affect: botA.affect || 'wondering',
+          });
+
+          index++;
+        }
       }
-    }, 9000);
+    }, 10000);
   }
 }

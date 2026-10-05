@@ -22,6 +22,7 @@ interface CompanionChatOverlayProps {
   isGatewayConnected: boolean;
   isRuntimeConnected: boolean;
   onOpenSettings?: () => void;
+  appMode?: 'runtime' | 'ai_studio';
 }
 
 export const CompanionChatOverlay: React.FC<CompanionChatOverlayProps> = ({
@@ -34,6 +35,7 @@ export const CompanionChatOverlay: React.FC<CompanionChatOverlayProps> = ({
   isGatewayConnected,
   isRuntimeConnected,
   onOpenSettings,
+  appMode = 'runtime',
 }) => {
   const [showHistory, setShowHistory] = useState(false);
 
@@ -111,7 +113,11 @@ export const CompanionChatOverlay: React.FC<CompanionChatOverlayProps> = ({
                 <div className="flex items-center justify-between text-slate-400 py-1">
                   <div className="flex items-center gap-2 font-mono text-xs text-cyan-300">
                     <Sparkles className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-                    <span>Processando via Python Runtime...</span>
+                    <span>
+                      {appMode === 'ai_studio'
+                        ? 'Gerando resposta via Gemini (AI Studio)...'
+                        : 'Processando via Python Runtime...'}
+                    </span>
                   </div>
                 </div>
               ) : (
@@ -129,14 +135,16 @@ export const CompanionChatOverlay: React.FC<CompanionChatOverlayProps> = ({
           onSendMessage={onSendMessage}
           onSendAudio={onSendAudio}
           voiceManager={voiceManager}
-          disabled={!isGatewayConnected}
+          disabled={appMode === 'runtime' && !isGatewayConnected}
           placeholder={
-            !isGatewayConnected
+            appMode === 'ai_studio'
+              ? `Teste com Gemini (AI Studio) • ${activeAgent.name}...`
+              : !isGatewayConnected
               ? 'Conectando ao Gateway...'
               : `Comando para ${activeAgent.name}...`
           }
           agentName={activeAgent.name}
-          isRuntimeConnected={isRuntimeConnected}
+          isRuntimeConnected={appMode === 'ai_studio' ? true : isRuntimeConnected}
         />
       </div>
     </>

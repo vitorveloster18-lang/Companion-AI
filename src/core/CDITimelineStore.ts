@@ -54,8 +54,8 @@ export class CDITimelineStore {
         { name: 'expression', value: 0.6 },
         { name: 'autonomy', value: 0.52 },
       ],
-      last_decision: 'WRITE_TO_JOURNAL',
-      stagnation: 5,
+      last_decision: undefined,
+      stagnation: 0,
       cse_units: 23,
       cse_signal: 0.001,
       peers_online: [
@@ -161,9 +161,22 @@ export class CDITimelineStore {
       return p;
     });
 
+    let topDrives = data.top_drives || this.biometrics.top_drives;
+    const rawDrives = (data as unknown as { drives?: unknown }).drives;
+    if (rawDrives && typeof rawDrives === 'object' && !Array.isArray(rawDrives)) {
+      const entries = Object.entries(rawDrives as Record<string, number>);
+      if (entries.length > 0) {
+        topDrives = entries.map(([name, value]) => ({
+          name,
+          value: Number(value ?? 0),
+        }));
+      }
+    }
+
     const newBiometrics: CDIBiometricsData = {
       ...this.biometrics,
       ...data,
+      top_drives: topDrives,
       peers_online: peersNormalized,
       timestamp: Date.now(),
     };

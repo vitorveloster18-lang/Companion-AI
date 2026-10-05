@@ -44,6 +44,7 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [headScreenPos, setHeadScreenPos] = useState<{ x: number; y: number } | null>(null);
   const [currentAvatarState, setCurrentAvatarState] = useState<AvatarState>(worldState.getState());
+  const [touchFeedback, setTouchFeedback] = useState<{ text: string; x: number; y: number } | null>(null);
 
   const controllerRef = useRef<AvatarController | null>(null);
   const executorRef = useRef<ActionExecutor | null>(null);
@@ -53,6 +54,9 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
+  const mouseVecRef = useRef<THREE.Vector2>(new THREE.Vector2());
 
   // Subscribe to WorldState updates
   useEffect(() => {
@@ -66,6 +70,7 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
     if (!multiCDIManager) return;
     return multiCDIManager.subscribe((state) => {
       multiAvatarGroupRef.current?.setVisible(state.viewMode === 'group');
+      multiAvatarGroupRef.current?.syncCDIs(state.cdis, state.activeId);
       if (state.currentPeerDialogue) {
         multiAvatarGroupRef.current?.triggerPeerDialogueBeam(
           state.currentPeerDialogue.from_id,
@@ -288,6 +293,82 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
     };
   }, []);
 
+  // Touch / Pointer sensory interaction handler
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    touchStartPosRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      time: Date.now(),
+    };
+  }, []);
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!touchStartPosRef.current || !canvasRef.current || !cameraRef.current || !controllerRef.current) return;
+
+      const dx = Math.abs(e.clientX - touchStartPosRef.current.x);
+      const dy = Math.abs(e.clientY - touchStartPosRef.current.y);
+      const dt = Date.now() - touchStartPosRef.current.time;
+      touchStartPosRef.current = null;
+
+      // Filter out camera orbit rotation drags (must be a quick tap/touch)
+      if (dx > 14 || dy > 14 || dt > 450) return;
+
+      const canvas = canvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      mouseVecRef.current.set(nx, ny);
+      raycasterRef.current.setFromCamera(mouseVecRef.current, cameraRef.current);
+
+      const avatarRoot = controllerRef.current.getRoot();
+      const intersects = raycasterRef.current.intersectObjects(avatarRoot.children, true);
+
+      if (intersects.length > 0) {
+        // Find first solid geometry hit
+        const hit = intersects.find(
+          (i) =>
+            i.object.name !== 'DreamAura' &&
+            (i.object.type === 'Mesh' || i.object.type === 'SkinnedMesh')
+        ) || intersects[0];
+
+        if (hit) {
+          const pt = hit.point;
+          let part: 'head' | 'chest' | 'arm' | 'hand' | 'leg' = 'chest';
+
+          if (pt.y >= 1.32) {
+            part = 'head';
+          } else if (pt.y >= 0.85 && Math.abs(pt.x) < 0.22) {
+            part = 'chest';
+          } else if (Math.abs(pt.x) >= 0.22 && pt.y >= 0.65) {
+            part = pt.y < 0.9 ? 'hand' : 'arm';
+          } else {
+            part = 'leg';
+          }
+
+          controllerRef.current.handleTouch(part, pt, (reactionMsg) => {
+            setTouchFeedback({
+              text: reactionMsg,
+              x: e.clientX - rect.left,
+              y: Math.max(20, e.clientY - rect.top - 40),
+            });
+            setTimeout(() => setTouchFeedback(null), 2600);
+          });
+
+          // Transmit sensation to runtime connection
+          connection.send({
+            type: 'sensation.touch',
+            part,
+            position: { x: Number(pt.x.toFixed(3)), y: Number(pt.y.toFixed(3)), z: Number(pt.z.toFixed(3)) },
+            timestamp: Date.now(),
+          });
+        }
+      }
+    },
+    [connection]
+  );
+
   // Drag & Drop handlers for .vrm files
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -325,9 +406,14 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="relative w-full h-full overflow-hidden select-none"
+      className="relative w-full h-full overflow-hidden select-none touch-none"
     >
-      <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing outline-none" />
+      <canvas
+        ref={canvasRef}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        className="w-full h-full block cursor-grab active:cursor-grabbing outline-none"
+      />
 
       {/* Floating Speech Bubble */}
       <SpeechBubble
@@ -335,6 +421,18 @@ export const SceneViewport: React.FC<SceneViewportProps> = ({
         visible={currentAvatarState.isSpeaking}
         screenPos={headScreenPos}
       />
+
+      {/* Floating Touch Sensation Cyber-Toast */}
+      {touchFeedback && (
+        <div
+          className="absolute z-40 pointer-events-none transform -translate-x-1/2 -translate-y-full animate-bounce"
+          style={{ left: touchFeedback.x, top: touchFeedback.y }}
+        >
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 border border-cyan-400/60 shadow-[0_0_15px_rgba(0,240,255,0.4)] backdrop-blur-md">
+            <span className="text-xs font-medium text-cyan-200 tracking-wide">{touchFeedback.text}</span>
+          </div>
+        </div>
+      )}
 
       {/* Drag & Drop Visual Backdrop */}
       {isDragging && (
